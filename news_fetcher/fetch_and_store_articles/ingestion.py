@@ -479,7 +479,7 @@ def store_articles(articles_data, topic_name, provider=None, assign_topic=None):
 
         scrape_result = scrape_article(url, fallback_content=content)
         scraped_content = scrape_result.content
-        if scraped_content:
+        if scraped_content and scrape_result.status != "unpaywalled":
             # Check if this looks like a duplicate login/error page across the outlet
             is_dup, dup_reason = detect_duplicate_outlet_content(scraped_content, outlet.id)
             if is_dup:

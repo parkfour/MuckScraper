@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # pays zero extra model swaps. Ollama holds one model at a time; generating
 # these inline per article on a different tier from grouping/classification
 # would swap models on every story and cost roughly 40 minutes a run.
-HEADLINE_TIER = llm_client.TIER_QUALITY
+HEADLINE_TIER = llm_client.TIER_FAST
 
 # How far back the per-run pass looks. Long enough to cover stories still
 # accumulating articles, short enough that the pass does not walk the whole
@@ -118,7 +118,8 @@ def generate_story_headline(story):
         logger.warning("LLM provider not configured, skipping headline generation.")
         return None
 
-    if len(story.articles) < 2:
+    is_tragedy = any("tragedy" in (t.name or "").lower() for t in story.topics)
+    if len(story.articles) < 2 and not is_tragedy:
         logger.debug(f"Story '{story.title}' has only 1 article, skipping headline.")
         return None
 
@@ -135,7 +136,8 @@ def generate_story_headline(story):
         f"- {article.title}" for article in sorted_articles[:10]
     )
 
-    prompt = render_prompt("headline_generator", titles=titles)
+    prompt_key = "headline_generator.tragedy" if is_tragedy else "headline_generator"
+    prompt = render_prompt(prompt_key, titles=titles) or render_prompt("headline_generator", titles=titles)
     if prompt is None:
         logger.error("No prompt template found for 'headline_generator'")
         return None
@@ -204,10 +206,19 @@ def _stale_headline_query(lookback_days=None):
         .subquery()
     )
 
+    from aggregator.models import Topic
+    tragedy_topic = Topic.query.filter(db.func.lower(Topic.name) == "tragedy").first()
+    tragedy_id = tragedy_topic.id if tragedy_topic else -1
+
     query = (
         db.session.query(Story)
         .join(per_story, per_story.c.story_id == Story.id)
-        .filter(per_story.c.article_count >= 2)
+        .filter(
+            db.or_(
+                per_story.c.article_count >= 2,
+                Story.topics.any(Topic.id == tragedy_id),
+            )
+        )
         .filter(
             db.or_(
                 Story.headline.is_(None),
@@ -250,6 +261,7 @@ def generate_headlines_for_stale_stories(lookback_days=STALE_HEADLINE_LOOKBACK_D
 
     logger.info(f"[Headlines] Generating {len(stories)} missing/stale headlines...")
     generated = failed = 0
+    import time
     for story in stories:
         headline = generate_story_headline(story)
         if headline:
@@ -258,6 +270,7 @@ def generate_headlines_for_stale_stories(lookback_days=STALE_HEADLINE_LOOKBACK_D
             generated += 1
         else:
             failed += 1
+        time.sleep(2)
 
     db.session.commit()
     logger.info(f"[Headlines] Generated {generated}, failed {failed}.")

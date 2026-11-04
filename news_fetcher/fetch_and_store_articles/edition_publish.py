@@ -340,7 +340,12 @@ def publish_edition():
     hour = now_eastern.hour
     today = now_eastern.date()
 
-    edition_type = 'morning' if 5 <= hour < 17 else 'evening'
+    if 3 <= hour < 11:
+        edition_type = 'morning'
+    elif 11 <= hour < 17:
+        edition_type = 'midday'
+    else:
+        edition_type = 'evening'
 
     # Skip if this edition slot already published
     existing = Edition.query.filter_by(date=today, edition_type=edition_type).first()

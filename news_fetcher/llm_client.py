@@ -104,6 +104,11 @@ OPENROUTER_HOST = os.environ.get("OPENROUTER_HOST", "https://openrouter.ai/api/v
 OPENROUTER_SITE_URL = os.environ.get("OPENROUTER_SITE_URL", "")
 OPENROUTER_APP_NAME = os.environ.get("OPENROUTER_APP_NAME", "")
 
+JETSON_HOST = os.environ.get("JETSON_HOST", "http://jetson.n.parkfour.com:8080/v1")
+JETSON_MODEL = os.environ.get("JETSON_MODEL", "/usr/local/llm-models/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf")
+JETSON_FAST_MODEL = os.environ.get("JETSON_FAST_MODEL", "") or JETSON_MODEL
+JETSON_API_KEY = os.environ.get("JETSON_API_KEY", "not-needed")
+
 
 def _openrouter_headers():
     headers = {}
@@ -120,7 +125,7 @@ def _openrouter_headers():
 #
 # Read through _openai_compatible_config() rather than directly, so tests can
 # monkeypatch the module-level vars the way they already do for Ollama/Gemini.
-OPENAI_COMPATIBLE_PROVIDERS = ("groq", "openrouter")
+OPENAI_COMPATIBLE_PROVIDERS = ("groq", "openrouter", "jetson", "custom")
 
 
 def _openai_compatible_config(provider):
@@ -141,6 +146,15 @@ def _openai_compatible_config(provider):
             "fast_model": OPENROUTER_FAST_MODEL,
             "headers": _openrouter_headers(),
             "label": "OpenRouter",
+        }
+    if provider in ("jetson", "custom"):
+        return {
+            "base_url": JETSON_HOST,
+            "api_key": JETSON_API_KEY,
+            "model": JETSON_MODEL,
+            "fast_model": JETSON_FAST_MODEL,
+            "headers": {},
+            "label": "Jetson llama.cpp",
         }
     return None
 
@@ -235,11 +249,18 @@ def generate_text(prompt, timeout=30, tier=TIER_QUALITY):
     """
     provider = provider_for_tier(tier)
     model = model_for_tier(tier)
+    text = None
     if provider == "gemini":
-        return _generate_text_gemini(prompt, timeout, model)
-    if provider in OPENAI_COMPATIBLE_PROVIDERS:
-        return _generate_text_openai_compatible(prompt, timeout, model, provider)
-    return _generate_text_ollama(prompt, timeout, model)
+        text = _generate_text_gemini(prompt, timeout, model)
+    elif provider in OPENAI_COMPATIBLE_PROVIDERS:
+        text = _generate_text_openai_compatible(prompt, timeout, model, provider)
+    else:
+        text = _generate_text_ollama(prompt, timeout, model)
+
+    if text is None and provider != "jetson" and JETSON_HOST:
+        logger.info(f"  [llm_client] Provider '{provider}' produced no output; failing over to Jetson llama.cpp...")
+        text = _generate_text_openai_compatible(prompt, timeout, JETSON_MODEL, "jetson")
+    return text
 
 
 def _probe_ollama_host(host):
@@ -447,7 +468,7 @@ def _generate_text_ollama(prompt, timeout, model=None):
     return _ollama_request("generate", _call)
 
 
-def _generate_text_gemini(prompt, timeout, model=None):
+def _generate_text_gemini(prompt, timeout, model=None, _attempt=0):
     if not GEMINI_API_KEY:
         return None
     try:
@@ -459,6 +480,15 @@ def _generate_text_gemini(prompt, timeout, model=None):
         text = (response.text or "").strip()
         return text or None
     except Exception as e:
+        err_str = str(e)
+        if "limit exceeded on Free Tier" in err_str or "requests per day" in err_str.lower():
+            logger.info("  [llm_client] Gemini daily quota exhausted; skipping retries to failover.")
+            return None
+        if ("429" in err_str or "RESOURCE_EXHAUSTED" in err_str) and _attempt < 3:
+            wait = 20 * (_attempt + 1)
+            logger.info(f"  [llm_client] Gemini 429 rate limit hit, retrying in {wait}s ({_attempt + 1}/3)...")
+            time.sleep(wait)
+            return _generate_text_gemini(prompt, timeout, model=model, _attempt=_attempt + 1)
         logger.info(f"  [llm_client] Gemini generate error: {e}")
         return None
 

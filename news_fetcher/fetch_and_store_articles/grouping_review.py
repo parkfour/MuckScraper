@@ -56,7 +56,9 @@ def clear_stale_single_article_headlines():
     )
 
     for story in stale_stories:
-        story.headline = None
+        is_tragedy = any("tragedy" in (t.name or "").lower() for t in story.topics)
+        if not is_tragedy:
+            story.headline = None
 
     if stale_stories:
         db.session.commit()

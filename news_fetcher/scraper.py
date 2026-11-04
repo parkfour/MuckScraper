@@ -346,11 +346,11 @@ def should_auto_rescrape_article(article, minimum_content_length=500):
     content = getattr(article, "content", None) or ""
     content_length = len(_clean_text(re.sub(r"<[^>]+>", " ", content)))
 
-    if status in (SCRAPE_STATUS_BLOCKED, SCRAPE_STATUS_SKIPPED):
+    if status == SCRAPE_STATUS_SKIPPED:
         return False
-    if status in ("pending", SCRAPE_STATUS_FAILED):
+    if status in ("pending", SCRAPE_STATUS_FAILED, SCRAPE_STATUS_BLOCKED):
         return True
-    if status in (SCRAPE_STATUS_SUCCESS, SCRAPE_STATUS_FALLBACK):
+    if status in (SCRAPE_STATUS_SUCCESS, SCRAPE_STATUS_FALLBACK, "unpaywalled"):
         return content_length < minimum_content_length
     return not content or content_length < minimum_content_length
 
@@ -798,7 +798,16 @@ def scrape_article(url, fallback_content=None, force=False):
     Returns a ScrapeResult with content and telemetry.
     """
     if is_domain_blocked(url):
-        logger.info(f"  [Scraper] Domain blocked, skipping: {url[:60]}")
+        logger.info(f"  [Scraper] Domain blocked, checking unpaywall archives: {url[:60]}")
+        from news_fetcher.unpaywall import unpaywall_article
+        unpay_content, unpay_method = unpaywall_article(url)
+        if unpay_content:
+            logger.info(f"  [Scraper] Successfully unpaywalled blocked domain article via {unpay_method}: {url[:60]}")
+            return ScrapeResult(
+                content=unpay_content,
+                status="unpaywalled",
+                method=f"unpaywall_{unpay_method}",
+            )
         return ScrapeResult(
             content=None,
             status=SCRAPE_STATUS_BLOCKED,
@@ -849,6 +858,18 @@ def scrape_article(url, fallback_content=None, force=False):
         if content:
             is_bad, reason = detect_bad_scrape(content)
             if is_bad:
+                from news_fetcher.unpaywall import unpaywall_article
+                unpay_content, unpay_method = unpaywall_article(url, initial_html=initial_html)
+                if unpay_content:
+                    logger.info(f"  [Scraper] {reason} on direct scrape, but unpaywalled via {unpay_method} for {url[:60]}")
+                    result = ScrapeResult(
+                        content=unpay_content,
+                        status="unpaywalled",
+                        method=f"unpaywall_{unpay_method}",
+                        http_status=http_status_override if http_status_override is not None else http_status,
+                    )
+                    update_retry_cache(url, result)
+                    return result
                 if blocklist_hit_recorded:
                     logger.info(f"  [Scraper] {reason} on a variant of {url[:60]} -- already counted for this article")
                 else:
@@ -927,6 +948,13 @@ def scrape_article(url, fallback_content=None, force=False):
         content = extract_structured_metadata(initial_html, url)
         if content:
             return with_author(finalize_content(content, "metadata", SCRAPE_STATUS_FALLBACK))
+
+    # Unpaywall fallback before falling back to feed description
+    from news_fetcher.unpaywall import unpaywall_article
+    unpay_content, unpay_method = unpaywall_article(url, initial_html=initial_html)
+    if unpay_content:
+        logger.info(f"  [Scraper] Recovered article via unpaywall {unpay_method} for {url[:60]}")
+        return with_author(finalize_content(unpay_content, f"unpaywall_{unpay_method}", status="unpaywalled"))
 
     if fallback_content:
         logger.info(f"  [Scraper] Falling back to feed/API description for {url[:60]}")

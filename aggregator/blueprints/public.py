@@ -127,7 +127,7 @@ def editions_by_month(editions):
     for edition in editions:
         days = months.setdefault(edition.date.strftime("%B %Y"), OrderedDict())
         days.setdefault(edition.date.strftime("%A, %B %d"), []).append(edition)
-    order = {"morning": 0, "evening": 1}
+    order = {"morning": 0, "midday": 1, "evening": 2}
     return [
         (month, [(day, sorted(eds, key=lambda e: order.get(e.edition_type, 2))) for day, eds in days.items()])
         for month, days in months.items()

@@ -157,7 +157,8 @@ class Story(db.Model):
 
     @property
     def has_ai_headline(self):
-        return len(self.articles) >= 2 and bool((self.headline or "").strip())
+        is_tragedy = any("tragedy" in (t.name or "").lower() for t in self.topics)
+        return (len(self.articles) >= 2 or is_tragedy) and bool((self.headline or "").strip())
 
     @property
     def display_headline(self):

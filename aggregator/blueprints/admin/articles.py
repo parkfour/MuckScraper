@@ -344,7 +344,7 @@ def _scrape_all_missing_task():
         (Article.content == None) |
         (Article.content == "") |
         (db.func.length(Article.content) < 500) |
-        (Article.scrape_status.in_(["pending", "failed"]))
+        (Article.scrape_status.in_(["pending", "failed", "blocked"]))
     ).order_by(Article.fetched_at.desc()).limit(100).all()
     eligible = [article for article in candidates if should_auto_rescrape_article(article)][:20]
     if eligible:
