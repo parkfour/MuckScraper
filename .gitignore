@@ -28,6 +28,7 @@ tests/*
 !tests/test_analysis_cards.py
 !tests/test_settings_permissions.py
 !tests/test_postgres_search.py
+!tests/test_gemini_rate_limit.py
 
 # Personal Headline feature files
 aggregator/public_app.py
