@@ -633,17 +633,16 @@ def _generate_text_openai_compatible(prompt, timeout, model, provider, _attempt=
             json=payload,
             timeout=timeout,
         )
-        if response.status_code == 429 and _attempt < OPENAI_COMPATIBLE_MAX_RETRIES:
-            # A 429 from these providers is usually a per-minute window rather
-            # than a hard quota -- Groq's free tier caps at 6,000 tokens/minute,
-            # which a single large summary prompt can exceed on its own -- so
-            # waiting it out works, unlike Gemini's per-day quota where a retry
-            # is futile.
+        if response.status_code in (429, 502, 503, 504) and _attempt < OPENAI_COMPATIBLE_MAX_RETRIES:
+            # 429 is rate-limiting; 502/503/504 are transient unavailability
+            # (e.g. Jetson slot queue temporarily full or briefly re-initializing).
+            resp_headers = getattr(response, "headers", None) or {}
+            default_wait = 2 * (_attempt + 1)
             wait_seconds = min(
-                float(response.headers.get("Retry-After", 15)) + 1,
+                float(resp_headers.get("Retry-After", default_wait)),
                 OPENAI_COMPATIBLE_MAX_RETRY_WAIT_SECONDS,
             )
-            logger.info(f"  [llm_client] {label} rate-limited, retrying in {wait_seconds:.0f}s")
+            logger.info(f"  [llm_client] {label} returned HTTP {response.status_code}, retrying in {wait_seconds:.0f}s")
             time.sleep(wait_seconds)
             return _generate_text_openai_compatible(
                 prompt, timeout, model, provider, _attempt=_attempt + 1, tier=tier
