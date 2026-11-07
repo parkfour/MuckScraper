@@ -4,17 +4,18 @@ provider has configured, and which pipeline tasks run on which tier.
 Provider settings are environment variables (news_fetcher/llm_client.py
 reads them at import, in both the app and scheduler containers), so this
 page shows them rather than editing them. The two things it does change
-are the auto deep-analysis switch and a one-line test call per tier.
+are the auto deep-analysis and analyse-all switches and a one-line test
+call per tier.
 """
 import logging
 import time
 
-from flask import jsonify, render_template, request
+from flask import jsonify, redirect, render_template, request, url_for
 
 from aggregator.permissions import ROLE_ADMIN, role_required
 
 from . import admin
-from ._shared import _load_json_setting
+from ._shared import _load_json_setting, _save_json_setting
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +126,11 @@ def _provider_rows():
 def llm_providers_page():
     from news_fetcher import llm_client as llm
     AUTO_ARTICLE_DEEP_ANALYSIS_SETTING_KEY = "auto_article_deep_analysis_enabled"
+    from news_fetcher.fetch_and_store_articles.edition_content import (
+        _env_flag, analyze_all_stories_setting,
+    )
+    analyze_all_enabled, analyze_all_source = analyze_all_stories_setting()
+    from news_fetcher.backfill import needs_paid_ack
 
     tiers = {
         "quality": {
@@ -150,7 +156,56 @@ def llm_providers_page():
         routes=routes,
         embedding_provider=llm.EMBEDDING_PROVIDER,
         auto_article_deep_analysis_enabled=bool(_load_json_setting(AUTO_ARTICLE_DEEP_ANALYSIS_SETTING_KEY)),
+        analyze_all_enabled=analyze_all_enabled,
+        analyze_all_source=analyze_all_source,
+        analyze_all_env=_env_flag("ANALYZE_ALL_STORIES"),
+        backfill_needs_ack=needs_paid_ack(tiers["quality"]["provider"]),
     )
+
+
+@admin.route("/settings/llm/analyze-all", methods=["POST"])
+@role_required(ROLE_ADMIN)
+def toggle_analyze_all_stories():
+    """The analyse-all switch. \"reset\" forgets it, so ANALYZE_ALL_STORIES
+    in .env decides again."""
+    from aggregator import db
+    from aggregator.models import AppSetting
+    from news_fetcher.fetch_and_store_articles import ANALYZE_ALL_STORIES_SETTING_KEY
+    if request.form.get("reset") == "true":
+        AppSetting.query.filter_by(key=ANALYZE_ALL_STORIES_SETTING_KEY).delete()
+        db.session.commit()
+        logger.info("[Settings] analyze_all_stories reset to the .env value")
+    else:
+        enabled = request.form.get("enabled") == "true"
+        _save_json_setting(ANALYZE_ALL_STORIES_SETTING_KEY, enabled)
+        logger.info(f"[Settings] analyze_all_stories set to {enabled}")
+    return redirect(url_for("admin.llm_providers_page") + "#analyze-all")
+
+
+@admin.route("/settings/llm/backfill")
+@role_required(ROLE_ADMIN)
+def backfill_status():
+    """Progress of the summary/analysis backfill, polled by the page."""
+    from news_fetcher import backfill
+    status = backfill.get_status()
+    status["pending_start"] = backfill.get_control().get("command") == "start"
+    return jsonify(status)
+
+
+@admin.route("/settings/llm/backfill", methods=["POST"])
+@role_required(ROLE_ADMIN)
+def backfill_control():
+    """Start (newest or oldest first) or stop the backfill. The scheduler
+    runs it; this only records the request."""
+    from news_fetcher import backfill
+    data = request.get_json(silent=True) or {}
+    if data.get("action") == "stop":
+        ok, message = backfill.request_stop("admin")
+    else:
+        ok, message = backfill.request_start(
+            data.get("order"), "admin", paid_ack=bool(data.get("paid_ack")))
+    logger.info(f"[Settings] backfill {data.get('action', 'start')}: {message}")
+    return jsonify({"ok": ok, "message": message})
 
 
 @admin.route("/settings/llm/test", methods=["POST"])

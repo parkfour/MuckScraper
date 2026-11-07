@@ -3,10 +3,11 @@
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from aggregator import create_app, db
 from aggregator.article_signals import bias_bucket_for_score, is_independent_source
 from aggregator.models import AppSetting, PipelineSchedule, ScheduledFetch
-from news_fetcher.fetch_and_store_articles import fetch_and_store_articles, process_current_edition, review_ambiguous_grouping_matches, sync_allsides_ratings, publish_edition, retry_unrated_outlets, clear_stale_single_article_headlines
+from news_fetcher.fetch_and_store_articles import fetch_and_store_articles, process_current_edition, analyze_all_recent_stories, review_ambiguous_grouping_matches, sync_allsides_ratings, publish_edition, retry_unrated_outlets, clear_stale_single_article_headlines
 from news_fetcher.headline_generator import generate_headlines_for_stale_stories
 from news_fetcher.copy_detector import mark_recent_copies
 from news_fetcher.opinion_linker import link_opinion_and_write_roundups
@@ -19,6 +20,7 @@ from news_fetcher.rss_fetcher import (
     get_skewed_story_ids_for_left_enrichment,
 )
 from news_fetcher import llm_client
+from news_fetcher import backfill
 from datetime import datetime, timedelta, timezone
 import logging
 import sys
@@ -1114,6 +1116,19 @@ def run_all_fetches(run_full_pipeline=True):
             run_metrics["steps"]["daily_horoscope"] = {"status": "skipped", "reason": "fetch_only_run"}
             run_metrics["steps"]["static_export"] = {"status": "skipped", "reason": "fetch_only_run"}
 
+        # Opt-in (ANALYZE_ALL_STORIES / Settings > LLM providers): summaries and
+        # analyses for every story with new articles, not only edition stories.
+        # Last, on full and fetch-only runs alike, so the edition, export and
+        # posts are never held up by it.
+        logging.info("--- Analysing all recent stories (if enabled) ---")
+        try:
+            run_metrics["steps"]["analyze_all_stories"] = analyze_all_recent_stories()
+        except Exception as e:
+            db.session.rollback()
+            logging.error(f"Error analysing all recent stories: {e}")
+            run_metrics["status"] = "partial_error"
+            run_metrics["steps"]["analyze_all_stories"] = {"status": "error", "reason": str(e)}
+
         set_last_fetch_time()
         run_metrics["finished_at"] = datetime.utcnow().isoformat()
         ollama_state["up_at_end"] = _check_ollama_status_for_report(ollama_state, "run_end")
@@ -1150,6 +1165,8 @@ if __name__ == "__main__":
 
     with app.app_context():
         db.create_all()
+        # A backfill marked running died with the previous process.
+        backfill.mark_interrupted_at_startup()
         # Only fetch on startup if enough time has passed
         if should_fetch_now():
             run_all_fetches(
@@ -1182,6 +1199,19 @@ if __name__ == "__main__":
             name=f"Scheduled {'full pipeline' if run_full_pipeline else 'fetch-only'} run at {hour}:00 ({TIMEZONE})",
             replace_existing=True,
         )
+
+    # Backfill requests from the admin page or the command line. The job only
+    # looks for a request and starts the backfill in its own thread.
+    # APScheduler logs every execution at INFO; keep this one out of the log.
+    logging.getLogger("apscheduler.executors.default").addFilter(
+        lambda record: "Backfill request check" not in record.getMessage())
+    scheduler.add_job(
+        lambda: backfill.poll(app),
+        trigger=IntervalTrigger(seconds=15),
+        id="backfill_poll",
+        name="Backfill request check",
+        replace_existing=True,
+    )
 
     logging.info(
         "Scheduler running with %s scheduled run(s) in %s: %s",

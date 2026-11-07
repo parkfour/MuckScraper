@@ -42,9 +42,9 @@ The latest published edition, with each story's Left / Center / Right coverage c
 ![Grouped Stories in dark mode](screenshots/dark_mode.png)
 
 ### Multi-Source Story View
-One story, 88 articles from 22 outlets: the summary up top, then every source with its outlet's leaning.
+One story, 88 articles from 20 outlets: the summary up top, then how the left, center and right are each covering it.
 ![Story Reader](screenshots/story_reader1.png)
-![Story sources](screenshots/story_reader2.png)
+![How each side is covering it](screenshots/story_reader2.png)
 
 ### Opinion
 Columns are kept out of the news but linked to the story they argue about, filed by the outlet's leaning, each with a one-line stance and a short roundup of what each side is saying.
@@ -308,7 +308,7 @@ An optional, read-only [MCP](https://modelcontextprotocol.io) server lets an AI 
 - LLM-assisted borderline match handling
 - AI story headlines for grouped stories
 - Story summaries and deeper reports
-- Per-article summaries and deep analysis for edition articles
+- Per-article summaries and deep analysis for edition articles; optionally (`ANALYZE_ALL_STORIES=true`, or the switch on Settings › LLM providers) for every story on every run, at about 30-40 extra minutes a run
 - Op/Ed kept apart from the news: its own page, opinion RSS feeds, columns linked to the stories they argue about, and a short opinion roundup per story
 - Stable-story skipping so unchanged stories do not keep reprocessing
 
