@@ -258,13 +258,13 @@ def generate_text(prompt, timeout=30, tier=TIER_QUALITY):
     if provider == "gemini":
         text = _generate_text_gemini(prompt, timeout, model)
     elif provider in OPENAI_COMPATIBLE_PROVIDERS:
-        text = _generate_text_openai_compatible(prompt, timeout, model, provider)
+        text = _generate_text_openai_compatible(prompt, timeout, model, provider, tier=tier)
     else:
         text = _generate_text_ollama(prompt, timeout, model)
 
     if text is None and provider != "jetson" and JETSON_HOST:
         logger.info(f"  [llm_client] Provider '{provider}' produced no output; failing over to Jetson llama.cpp...")
-        text = _generate_text_openai_compatible(prompt, timeout, JETSON_MODEL, "jetson")
+        text = _generate_text_openai_compatible(prompt, timeout, JETSON_MODEL, "jetson", tier=tier)
     return text
 
 
@@ -596,7 +596,7 @@ OPENAI_COMPATIBLE_MAX_RETRIES = GROQ_MAX_RETRIES
 OPENAI_COMPATIBLE_MAX_RETRY_WAIT_SECONDS = GROQ_MAX_RETRY_WAIT_SECONDS
 
 
-def _generate_text_openai_compatible(prompt, timeout, model, provider, _attempt=0):
+def _generate_text_openai_compatible(prompt, timeout, model, provider, _attempt=0, tier=TIER_QUALITY):
     """One implementation of the OpenAI `chat/completions` shape, shared by
     every provider that speaks it.
 
@@ -610,14 +610,27 @@ def _generate_text_openai_compatible(prompt, timeout, model, provider, _attempt=
     model = model or config["model"]
     label = config["label"]
     headers = {"Authorization": f"Bearer {config['api_key']}", **config["headers"]}
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if provider in ("jetson", "custom"):
+        # Suppress reasoning / CoT thinking tokens to avoid timeouts on fast classification/grouping
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
+        if tier == TIER_FAST:
+            payload["max_tokens"] = int(os.environ.get("JETSON_FAST_MAX_TOKENS", "128"))
+            payload["messages"] = [
+                {"role": "system", "content": "Respond directly without thinking or reasoning."},
+                {"role": "user", "content": prompt},
+            ]
+        else:
+            payload["max_tokens"] = int(os.environ.get("JETSON_MAX_TOKENS", "1024"))
+
     try:
         response = requests.post(
             f"{config['base_url'].rstrip('/')}/chat/completions",
             headers=headers,
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-            },
+            json=payload,
             timeout=timeout,
         )
         if response.status_code == 429 and _attempt < OPENAI_COMPATIBLE_MAX_RETRIES:
@@ -633,7 +646,7 @@ def _generate_text_openai_compatible(prompt, timeout, model, provider, _attempt=
             logger.info(f"  [llm_client] {label} rate-limited, retrying in {wait_seconds:.0f}s")
             time.sleep(wait_seconds)
             return _generate_text_openai_compatible(
-                prompt, timeout, model, provider, _attempt=_attempt + 1
+                prompt, timeout, model, provider, _attempt=_attempt + 1, tier=tier
             )
         response.raise_for_status()
         text = response.json()["choices"][0]["message"]["content"]
@@ -643,14 +656,14 @@ def _generate_text_openai_compatible(prompt, timeout, model, provider, _attempt=
         return None
 
 
-def _generate_text_groq(prompt, timeout, model=None, _attempt=0):
+def _generate_text_groq(prompt, timeout, model=None, _attempt=0, tier=TIER_QUALITY):
     """Retained as a named entry point: it predates the generalization and is
     referenced by existing tests and call sites."""
-    return _generate_text_openai_compatible(prompt, timeout, model, "groq", _attempt=_attempt)
+    return _generate_text_openai_compatible(prompt, timeout, model, "groq", _attempt=_attempt, tier=tier)
 
 
-def _generate_text_openrouter(prompt, timeout, model=None, _attempt=0):
-    return _generate_text_openai_compatible(prompt, timeout, model, "openrouter", _attempt=_attempt)
+def _generate_text_openrouter(prompt, timeout, model=None, _attempt=0, tier=TIER_QUALITY):
+    return _generate_text_openai_compatible(prompt, timeout, model, "openrouter", _attempt=_attempt, tier=tier)
 
 
 # Providers with no embedding endpoint at all. Kept separate from a plain

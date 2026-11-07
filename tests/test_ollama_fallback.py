@@ -239,5 +239,24 @@ class OllamaFallbackTests(unittest.TestCase):
         self.assertEqual(detail["role"], "primary")
 
 
+    def test_jetson_fast_tier_disables_thinking(self):
+        """Fast-tier requests to Jetson/custom OpenAI-compatible provider must disable thinking and cap tokens."""
+        with mock.patch("requests.post") as mock_post, \
+             mock.patch.object(llm_client, "LLM_FAST_PROVIDER", "jetson"), \
+             mock.patch.object(llm_client, "JETSON_HOST", "http://test-jetson:8080/v1"), \
+             mock.patch.object(llm_client, "JETSON_MODEL", "test-gemma"), \
+             mock.patch.object(llm_client, "JETSON_FAST_MODEL", "test-gemma"):
+            mock_post.return_value = _FakeResponse(200, {
+                "choices": [{"message": {"content": "Business"}}]
+            })
+            result = llm_client.generate_text("Classify this", tier=llm_client.TIER_FAST)
+            self.assertEqual(result, "Business")
+            mock_post.assert_called_once()
+            called_json = mock_post.call_args[1]["json"]
+            self.assertEqual(called_json["chat_template_kwargs"], {"enable_thinking": False})
+            self.assertEqual(called_json["max_tokens"], 128)
+            self.assertEqual(called_json["messages"][0]["role"], "system")
+            self.assertIn("without thinking", called_json["messages"][0]["content"])
+
 if __name__ == "__main__":
     unittest.main()
