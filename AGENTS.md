@@ -51,29 +51,89 @@ Always use the dedicated GitHub identity and SSH agent configuration when commit
 
 ---
 
-## 4. Lakefour Production Deployment (`lakefour-deployment` branch)
+## 4. Lakefour Production Deployment & Architecture
 
-The production server `lakefour` runs the dedicated `lakefour-deployment` branch, which combines upstream `main` with site-specific enhancements:
+### Host & Environment Details
+* **Host**: `lakefour` (`lakefour.n.parkfour.com`)
+* **Deployment Path**: `/zjunk/services/muckscraper`
+* **Access**: `ssh -i ~/.ssh/ztfs_deploy_key paul@lakefour`
+* **Docker Compose Stack**:
+  * `muckscraper-app-1`: FastAPI web interface and API on local port `5000`.
+  * `muckscraper-scheduler-1`: Automated cron scheduler for daily editions.
+  * `muckscraper-postgres-1`: PostgreSQL 16 with `pgvector` for semantic embeddings and hybrid search.
+  * `muckscraper-docker-restart-proxy-1`: Helper container to trigger container reboots via Docker socket.
+* **Database & Migration Memory**:
+  * Earlier versions used a dedicated Meilisearch container. As of upstream v1.1.0, Meilisearch was fully retired in favor of PostgreSQL native full-text + pgvector search.
+* **Public Gateway & Reverse Proxy**:
+  * Apache virtual host on `center` (`/etc/apache2/sites-available/news.parkfour.com-ssl.conf`) terminates TLS (`https://news.parkfour.com`) and reverse proxies both HTTP and WebSocket traffic (for live edition generation progress) to `lakefour.n.parkfour.com:5000`.
 
-* **Branch**: `lakefour-deployment`
-* **Local Features in `lakefour-deployment`**:
-  1. **Unpaywall Article Scraping Fallback**: `news_fetcher/unpaywall.py` for paywalled source resolution.
-  2. **Tragedy Topic Deep Reports**: Custom classification and headline preservation for tragedy/breaking events.
-  3. **Midday Edition Support**: Scheduled publishing for midday digest.
-  4. **Jetson Local LLM Tier**: Fast-tier LLM inference on Jetson host with thinking tokens suppressed and output token limits configured.
-  5. **Font Kerning & Typography**: Smart-quote display fix across all web templates.
-  6. **OpenAI Endpoint Transient Retries**: Resiliency against Gateway 502/503 timeouts.
+### Scheduled Publishing Schedule
+* Morning Edition: 7:00 AM
+* Midday Edition: 12:00 PM (Local custom feature)
+* Evening Edition: 6:00 PM
 
-### Deployment & Sync Workflow
-1. Commit or cherry-pick changes onto `lakefour-deployment` locally.
-2. Push to `origin`:
-   ```bash
-   git push origin lakefour-deployment
-   ```
-3. Deploy to `lakefour` (note: on `lakefour`, the fork remote is named `parkfour`):
-   ```bash
-   ssh -i ~/.ssh/ztfs_deploy_key paul@lakefour "cd /zjunk/services/muckscraper && git pull parkfour lakefour-deployment && docker compose restart app scheduler"
-   ```
+---
+
+## 5. Development Branching Strategy & Local Customizations
+
+### Why `lakefour-deployment` Exists
+`grregis/MuckScraper` is an active upstream open-source project. To keep our production deployment stable while contributing clean PRs upstream:
+* **`upstream/main`**: Pristine tracking branch of the official open-source repository.
+* **`origin/main`**: Our GitHub fork's default branch, kept fast-forward aligned with `upstream/main`.
+* **`lakefour-deployment`**: Our long-lived production deployment branch. It integrates `upstream/main` with site-specific production features and local bug fixes waiting for upstream review.
+
+### Local Features Maintained on `lakefour-deployment`
+1. **Jetson Local LLM Fast-Tier (`news_fetcher/llm_client.py`)**:
+   * Uses local Jetson cluster (`jetson.n.parkfour.com:8080`) for rapid headline/summary classification.
+   * *Critical Memory*: Reasoning models on Jetson generate `<thought>...</thought>` thinking tokens that can blow out token limits and fail headline generation. In `news_fetcher/llm_client.py`, reasoning tokens are explicitly stripped and output length is capped (`max_tokens: 300`) to guarantee fast, reliable completion.
+2. **Unpaywall Article Scraping Fallback (`news_fetcher/unpaywall.py`)**:
+   * Resolves paywalled or restricted news links via the Unpaywall open-access resolver when standard scraping yields sparse content.
+3. **Tragedy Topic Headline Preservation (`deep_report/tragedy`)**:
+   * Preserves exact breaking/tragedy headlines and prevents aggressive summarization from diluting critical details.
+4. **Midday Edition Support (`edition_publish.py`)**:
+   * Extra scheduled edition at 12:00 PM.
+5. **Smart Quote Typography & Font Stack**:
+   * Eliminates large spacing gaps around smart quotes/apostrophes by prioritizing Western system fonts and forcing `font-kerning: normal`.
+6. **OpenAI Endpoint Transient Retries**:
+   * Retries transient 502/503/504 errors with exponential backoff on OpenAI-compatible API providers.
+
+### Historical Context: `lakefour/local-wip`
+* `lakefour/local-wip` (commit `f262abb`) was the historical snapshot branch used to preserve uncommitted local features from `lakefour` before standardizing on git worktrees.
+* In commit `182465d`, upstream v1.1.0 was merged cleanly into `lakefour-deployment` and all local features were re-integrated. `lakefour-deployment` is now the sole authoritative branch for production.
+
+---
+
+## 6. PR & Deployment Workflows
+
+### Creating an Upstream Pull Request (Clean & Conflict-Free)
+Never branch off `lakefour-deployment` for upstream PRs—this prevents local deployment code from leaking upstream.
+```bash
+# 1. Ensure upstream is fresh
+git fetch upstream
+
+# 2. Branch directly from upstream/main
+git checkout -b fix/my-clean-fix upstream/main
+
+# 3. Cherry-pick or make changes, write tests, and verify
+pytest tests/
+
+# 4. Push to fork under coding@parkfour.com
+git push -u origin fix/my-clean-fix
+```
+
+### Deploying to Lakefour
+```bash
+# 1. Merge or cherry-pick approved changes into lakefour-deployment locally
+git checkout lakefour-deployment
+git merge --no-ff fix/my-clean-fix
+
+# 2. Push to GitHub fork
+git push origin lakefour-deployment
+
+# 3. Pull on lakefour (Note: remote is named 'parkfour' on lakefour)
+ssh -i ~/.ssh/ztfs_deploy_key paul@lakefour \
+  "cd /zjunk/services/muckscraper && git pull parkfour lakefour-deployment && docker compose restart app scheduler"
+```
 
 ---
 
