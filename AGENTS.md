@@ -34,15 +34,16 @@ Always use the dedicated GitHub identity and SSH agent configuration when commit
 
 ### Merged Upstream
 * **PR #41** (`fix/rss-feed-topic-labels`): Makes feed topic assignment opt-in per feed.
+* **PR #42** (`fix/gemini-429-backoff` - commit `e913748`): Handles Gemini 429 quota exhaustion and transient errors with exponential backoff and container rate pacing. Merged 2026-11-05.
 * **PR #43** (`feat/json-ld-article-body`): Extracts article body from JSON-LD schema with fallback.
 
 ### Submitted / Active PRs
-* **PR #42** (`fix/gemini-429-backoff` - commit `e913748`):
-  * Handles Gemini 429 quota exhaustion and transient errors with exponential backoff and container rate passing.
-* **`fix/font-stack-quote-spacing`** (commit `7560260`):
-  * Fixes huge gaps after smart quotes / apostrophes across templates by prioritizing Western system fonts (`-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto...`) and setting `font-kerning: normal`.
-* **`fix/openai-compatible-transient-retries`** (commit `c7e47c4`):
+* **PR #44** (`fix/font-stack-quote-spacing`):
+  * Eliminates large spacing gaps around smart quotes / apostrophes across templates by prioritizing Western system fonts and forcing `font-kerning: normal`.
+  * Updated with review feedback: `--font-sans` single token in `theme.css` without trailing `system-ui`, and plain `var(--font-sans)` across templates. Rebased cleanly on `upstream/main`.
+* **PR #45** (`fix/openai-compatible-transient-retries`):
   * Adds transient error retries (502, 503, 504) for OpenAI-compatible LLM endpoints.
+  * Updated with review feedback: preserves deliberate 16s default wait on 429 rate limits, uses exponential backoff for 502/503/504, includes unit tests for both 429 and 503 retry waits. Rebased cleanly on `upstream/main`.
 
 ### Rules for New Pull Requests
 1. **Always Branch from Upstream**: When creating PR branches for `grregis/MuckScraper`, branch directly from `upstream/main` (`git checkout -b fix/feature-name upstream/main`).
