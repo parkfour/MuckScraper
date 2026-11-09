@@ -70,9 +70,9 @@ The production server `lakefour` runs the dedicated `lakefour-deployment` branch
    ```bash
    git push origin lakefour-deployment
    ```
-3. Deploy to `lakefour`:
+3. Deploy to `lakefour` (note: on `lakefour`, the fork remote is named `parkfour`):
    ```bash
-   ssh -i ~/.ssh/ztfs_deploy_key paul@lakefour "cd /zjunk/services/muckscraper && git pull origin lakefour-deployment && docker compose restart app scheduler"
+   ssh -i ~/.ssh/ztfs_deploy_key paul@lakefour "cd /zjunk/services/muckscraper && git pull parkfour lakefour-deployment && docker compose restart app scheduler"
    ```
 
 ---
