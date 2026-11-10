@@ -45,6 +45,24 @@ Always use the dedicated GitHub identity and SSH agent configuration when commit
   * Adds transient error retries (502, 503, 504) for OpenAI-compatible LLM endpoints.
   * Updated with review feedback: preserves deliberate 16s default wait on 429 rate limits, uses exponential backoff for 502/503/504, includes unit tests for both 429 and 503 retry waits. Rebased cleanly on `upstream/main`.
 
+### Potential / Staged Upstream PRs (Currently Soak-Testing on Lakefour)
+* **Candidate A: Pluggable RSS 2.0 & JSON Feed Export (`feat/feed-export-plugin`)**:
+  * **Summary**: Adds outbound feed syndication for `/headlines`, `/articles`, and `/multi-stories` so users can subscribe to MuckScraper editions in RSS readers (NetNewsWire, Feedly, Miniflux, etc.).
+  * **Key Capabilities**:
+    * RSS 2.0 XML with Atom self-links, RFC 822 `pubDate`, sanitized HTML summaries, source outlet attribution with bias labels, and topic categories.
+    * JSON Feed 1.1 specification support.
+    * Transparent format negotiation via query (`?format=rss`, `?format=json`), direct URL extensions (`.rss`, `.json`, `/feed.xml`), or HTTP `Accept` headers.
+    * Native topic filtering preserved (`/articles.rss?topic=US+Politics` or `?topic=US+Politics&format=rss`).
+    * HTML `<head>` auto-discovery tag `<link rel="alternate" type="application/rss+xml">`.
+    * Feed access permitted when `PUBLIC_READ_ACCESS=false`, with optional `FEED_ACCESS_TOKEN` for private subscriptions.
+  * **Upstream Value**: Zero new dependencies (stdlib `xml.etree.ElementTree` + existing `bleach`), non-intrusive plugin wrapper `render_feed_or_template()`, fully covered by 15 tests in `tests/test_feed_export.py`.
+* **Candidate B: Pluggable Scraper Fallback Architecture & Unpaywall Plugin (`feat/scraper-fallback-plugins`)**:
+  * **Summary**: Decoupled, zero-overhead scraper fallback registry in `news_fetcher/scraper_plugins.py` that allows pluggable article recovery when standard scraping yields sparse or paywalled text.
+  * **Key Capabilities**:
+    * Clean plugin interface `register_fallback_plugin()`, `run_fallback_plugins()`.
+    * Unpaywall & Wayback Machine fallback (`news_fetcher/unpaywall.py`) with tracking parameter stripping, raw `id_` HTML fetching to avoid injected Wayback JS, JSON-LD structured data extraction, and Cloudflare challenge detection.
+  * **Upstream Value**: Decouples third-party scraping fallbacks from core scraper logic; allows other developers to implement custom extraction plugins easily without modifying core. Covered by 6 tests in `tests/test_unpaywall_plugin.py`.
+
 ### Rules for New Pull Requests
 1. **Always Branch from Upstream**: When creating PR branches for `grregis/MuckScraper`, branch directly from `upstream/main` (`git checkout -b fix/feature-name upstream/main`).
 2. **Zero Deployment Leakage**: Never include `lakefour-deployment` specific custom features (e.g. Jetson local fallback, custom tragedy scrapers) in upstream PR branches.
@@ -87,15 +105,20 @@ Always use the dedicated GitHub identity and SSH agent configuration when commit
 1. **Jetson Local LLM Fast-Tier (`news_fetcher/llm_client.py`)**:
    * Uses local Jetson cluster (`jetson.n.parkfour.com:8080`) for rapid headline/summary classification.
    * *Critical Memory*: Reasoning models on Jetson generate `<thought>...</thought>` thinking tokens that can blow out token limits and fail headline generation. In `news_fetcher/llm_client.py`, reasoning tokens are explicitly stripped and output length is capped (`max_tokens: 300`) to guarantee fast, reliable completion.
-2. **Unpaywall Article Scraping Fallback (`news_fetcher/unpaywall.py`)**:
-   * Resolves paywalled or restricted news links via the Unpaywall open-access resolver when standard scraping yields sparse content.
-3. **Tragedy Topic Headline Preservation (`deep_report/tragedy`)**:
+2. **Pluggable Scraper Fallback Architecture & Unpaywall Plugin (`news_fetcher/scraper_plugins.py`, `news_fetcher/unpaywall.py`)**:
+   * Decoupled fallback plugin architecture; chains through registered recovery plugins when core scraping fails or is sparse.
+   * Resolves paywalled or restricted news links via Unpaywall and Wayback Machine raw HTML (`id_`), cleans tracking parameters, extracts JSON-LD metadata, and detects Cloudflare blocks.
+3. **Pluggable RSS 2.0 & JSON Feed Export Plugin (`aggregator/feed_export.py`)**:
+   * Outbound syndication for editions and stories on `/headlines`, `/articles`, and `/multi-stories`.
+   * Transparent format negotiation (`.rss`, `.json`, `/feed.xml`, `?format=rss`, `?format=json`, Accept headers) and HTML `<head>` auto-discovery.
+   * Full topic filtering preservation (`/articles.rss?topic=...`) and unauthenticated feed reader bypass with optional `FEED_ACCESS_TOKEN`.
+4. **Tragedy Topic Headline Preservation (`deep_report/tragedy`)**:
    * Preserves exact breaking/tragedy headlines and prevents aggressive summarization from diluting critical details.
-4. **Midday Edition Support (`edition_publish.py`)**:
+5. **Midday Edition Support (`edition_publish.py`)**:
    * Extra scheduled edition at 12:00 PM.
-5. **Smart Quote Typography & Font Stack**:
+6. **Smart Quote Typography & Font Stack**:
    * Eliminates large spacing gaps around smart quotes/apostrophes by prioritizing Western system fonts and forcing `font-kerning: normal`.
-6. **OpenAI Endpoint Transient Retries**:
+7. **OpenAI Endpoint Transient Retries**:
    * Retries transient 502/503/504 errors with exponential backoff on OpenAI-compatible API providers.
 
 ### Historical Context: `lakefour/local-wip`
