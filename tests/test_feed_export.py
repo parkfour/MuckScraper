@@ -350,3 +350,48 @@ def test_admin_articles_rss(app_with_db):
     assert resp2.status_code == 200
     assert "application/rss+xml" in resp2.headers["Content-Type"]
 
+
+def test_feeds_allowed_when_public_read_access_is_false(app_with_db):
+    app_with_db.config["PUBLIC_READ_ACCESS"] = False
+    client = app_with_db.test_client()
+
+    # Browser request to HTML headlines should require login (302)
+    html_resp = client.get("/headlines")
+    assert html_resp.status_code == 302
+    assert "/auth/login" in html_resp.headers["Location"]
+
+    # Feed request should be allowed without login (200)
+    rss_resp = client.get("/headlines.rss")
+    assert rss_resp.status_code == 200
+    assert "application/rss+xml" in rss_resp.headers["Content-Type"]
+
+    rss_query_resp = client.get("/headlines?format=rss")
+    assert rss_query_resp.status_code == 200
+
+    topic_rss_resp = client.get("/articles.rss?topic=US+Politics")
+    assert topic_rss_resp.status_code == 200
+
+
+def test_feed_access_token_enforcement(app_with_db):
+    app_with_db.config["PUBLIC_READ_ACCESS"] = False
+    client = app_with_db.test_client()
+
+    with patch.dict(os.environ, {"FEED_ACCESS_TOKEN": "secret-reader-token"}):
+        # Without token, should be rejected / redirected to login
+        unauth_resp = client.get("/headlines.rss")
+        assert unauth_resp.status_code == 302
+
+        # With wrong token, should be rejected
+        wrong_resp = client.get("/headlines.rss?token=bad-token")
+        assert wrong_resp.status_code == 302
+
+        # With correct query token, succeeds
+        auth_resp = client.get("/headlines.rss?token=secret-reader-token")
+        assert auth_resp.status_code == 200
+        assert "application/rss+xml" in auth_resp.headers["Content-Type"]
+
+        # With Bearer header, succeeds
+        header_resp = client.get("/headlines.rss", headers={"Authorization": "Bearer secret-reader-token"})
+        assert header_resp.status_code == 200
+
+
