@@ -30,6 +30,7 @@ tests/*
 !tests/test_postgres_search.py
 !tests/test_gemini_rate_limit.py
 !tests/test_unpaywall_plugin.py
+!tests/test_feed_export.py
 
 # Personal Headline feature files
 aggregator/public_app.py
