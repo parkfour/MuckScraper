@@ -78,10 +78,16 @@ def request_wants_feed() -> bool:
     if path.endswith((".rss", "/feed.xml", "/rss.xml", ".json")):
         return True
 
-    best = request.accept_mimetypes.best_match(
-        ["application/rss+xml", "application/atom+xml", "application/xml", "application/json", "text/html"]
-    )
-    if best in ("application/rss+xml", "application/atom+xml", "application/json"):
+    # If format was not in query or path, check Accept header
+    raw_accept = request.headers.get("Accept", "").lower()
+    # Standard browser Accept header includes text/html; wildcard */* is not an explicit feed request
+    if "text/html" in raw_accept or not raw_accept or raw_accept == "*/*":
+        return False
+
+    if "application/rss+xml" in raw_accept or "application/atom+xml" in raw_accept:
+        return True
+
+    if "application/json" in raw_accept:
         return True
 
     return False
@@ -90,10 +96,18 @@ def request_wants_feed() -> bool:
 def get_requested_feed_format() -> str:
     """Return 'json' if JSON Feed requested, otherwise 'rss'."""
     fmt = (request.args.get("format") or "").strip().lower()
-    if fmt == "json" or request.path.lower().endswith(".json"):
+    path = request.path.lower()
+
+    if fmt in ("rss", "feed", "xml", "atom") or path.endswith((".rss", "/feed.xml", "/rss.xml")):
+        return "rss"
+
+    if fmt == "json" or path.endswith(".json"):
         return "json"
-    if request.accept_mimetypes.best_match(["application/json", "application/rss+xml", "text/html"]) == "application/json":
+
+    raw_accept = request.headers.get("Accept", "").lower()
+    if "application/json" in raw_accept and "application/rss+xml" not in raw_accept:
         return "json"
+
     return "rss"
 
 
