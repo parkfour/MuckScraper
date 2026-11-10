@@ -45,6 +45,7 @@ def fetch_page():
 # scrape-status filter and no scrape details (see articles.html).
 @admin.route("/articles.rss")
 @admin.route("/articles/feed.xml")
+@admin.route("/articles.json")
 @admin.route("/articles")
 @public_or_login
 def list_articles(per_page=25, force_multi=False):
@@ -178,6 +179,7 @@ def list_articles(per_page=25, force_multi=False):
 
 @admin.route("/multi-stories.rss")
 @admin.route("/multi-stories/feed.xml")
+@admin.route("/multi-stories.json")
 @admin.route("/multi-stories")
 @public_or_login
 def multi_article_stories():

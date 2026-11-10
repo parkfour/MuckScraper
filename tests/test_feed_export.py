@@ -285,6 +285,12 @@ def test_headlines_feed_json_format(app_with_db):
     titles = [it["title"] for it in data["items"]]
     assert "Senate Reaches Bipartisan Accord" in titles
 
+    resp_ext = client.get("/headlines.json")
+    assert resp_ext.status_code == 200
+    assert "application/json" in resp_ext.headers["Content-Type"]
+    data_ext = resp_ext.get_json()
+    assert data_ext["version"] == "https://jsonfeed.org/version/1.1"
+
 
 def test_headlines_html_page_contains_autodiscovery_link(app_with_db):
     client = app_with_db.test_client()

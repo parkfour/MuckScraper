@@ -35,6 +35,7 @@ def index():
 
 @public.route("/headlines.rss")
 @public.route("/headlines/feed.xml")
+@public.route("/headlines.json")
 @public.route("/headlines")
 @public_or_login
 def headlines_feed():
@@ -102,6 +103,7 @@ def headlines_feed():
 
 @public.route("/articles.rss")
 @public.route("/articles/feed.xml")
+@public.route("/articles.json")
 @public.route("/articles")
 @public_or_login
 def public_articles():
@@ -111,6 +113,7 @@ def public_articles():
 
 @public.route("/multi-stories.rss")
 @public.route("/multi-stories/feed.xml")
+@public.route("/multi-stories.json")
 @public.route("/multi-stories")
 @public_or_login
 def public_multi_stories():
