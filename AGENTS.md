@@ -36,18 +36,12 @@ Always use the dedicated GitHub identity and SSH agent configuration when commit
 * **PR #41** (`fix/rss-feed-topic-labels`): Makes feed topic assignment opt-in per feed.
 * **PR #42** (`fix/gemini-429-backoff` - commit `e913748`): Handles Gemini 429 quota exhaustion and transient errors with exponential backoff and container rate pacing. Merged 2026-11-05.
 * **PR #43** (`feat/json-ld-article-body`): Extracts article body from JSON-LD schema with fallback.
+* **PR #44** (`fix/font-stack-quote-spacing` - commit `90cbc77`): Prioritizes Western system fonts and forces `font-kerning: normal` to fix smart-quote spacing. Merged 2026-11-11.
+* **PR #45** (`fix/openai-compatible-transient-retries` - commit `ffe31b8`): Adds transient error retries (502, 503, 504) for OpenAI-compatible LLM endpoints. Merged 2026-11-11.
 
-### Submitted / Active PRs
-* **PR #44** (`fix/font-stack-quote-spacing`):
-  * Eliminates large spacing gaps around smart quotes / apostrophes across templates by prioritizing Western system fonts and forcing `font-kerning: normal`.
-  * Updated with review feedback: `--font-sans` single token in `theme.css` without trailing `system-ui`, and plain `var(--font-sans)` across templates. Rebased cleanly on `upstream/main`.
-* **PR #45** (`fix/openai-compatible-transient-retries`):
-  * Adds transient error retries (502, 503, 504) for OpenAI-compatible LLM endpoints.
-  * Updated with review feedback: preserves deliberate 16s default wait on 429 rate limits, uses exponential backoff for 502/503/504, includes unit tests for both 429 and 503 retry waits. Rebased cleanly on `upstream/main`.
-
-### Potential / Staged Upstream PRs (Currently Soak-Testing on Lakefour)
-* **Candidate A: Pluggable RSS 2.0 & JSON Feed Export (`feat/feed-export-plugin`)**:
-  * **Summary**: Adds outbound feed syndication for `/headlines`, `/articles`, and `/multi-stories` so users can subscribe to MuckScraper editions in RSS readers (NetNewsWire, Feedly, Miniflux, etc.).
+### Submitted / Active PRs (Ready for Review / Pull Request Submission)
+* **`feat/feed-export-plugin`**:
+  * **Summary**: Adds outbound feed syndication for `/headlines`, `/articles`, and `/multi-stories` so users can subscribe to MuckScraper editions and topics in RSS readers (NetNewsWire, Feedly, Miniflux, etc.).
   * **Key Capabilities**:
     * RSS 2.0 XML with Atom self-links, RFC 822 `pubDate`, sanitized HTML summaries, source outlet attribution with bias labels, and topic categories.
     * JSON Feed 1.1 specification support.
@@ -56,12 +50,16 @@ Always use the dedicated GitHub identity and SSH agent configuration when commit
     * HTML `<head>` auto-discovery tag `<link rel="alternate" type="application/rss+xml">`.
     * Feed access permitted when `PUBLIC_READ_ACCESS=false`, with optional `FEED_ACCESS_TOKEN` for private subscriptions.
   * **Upstream Value**: Zero new dependencies (stdlib `xml.etree.ElementTree` + existing `bleach`), non-intrusive plugin wrapper `render_feed_or_template()`, fully covered by 15 tests in `tests/test_feed_export.py`.
-* **Candidate B: Pluggable Scraper Fallback Architecture & Unpaywall Plugin (`feat/scraper-fallback-plugins`)**:
+  * **Compare URL**: `https://github.com/grregis/MuckScraper/compare/main...parkfour:feat/feed-export-plugin`
+
+* **`feat/scraper-fallback-plugins`**:
   * **Summary**: Decoupled, zero-overhead scraper fallback registry in `news_fetcher/scraper_plugins.py` that allows pluggable article recovery when standard scraping yields sparse or paywalled text.
   * **Key Capabilities**:
-    * Clean plugin interface `register_fallback_plugin()`, `run_fallback_plugins()`.
+    * Clean plugin interface `register_fallback_plugin()`, `run_fallback_plugins()` with env discovery (`SCRAPER_FALLBACK_PLUGINS="module:function"` or `ENABLE_UNPAYWALL_FALLBACK=true`).
     * Unpaywall & Wayback Machine fallback (`news_fetcher/unpaywall.py`) with tracking parameter stripping, raw `id_` HTML fetching to avoid injected Wayback JS, JSON-LD structured data extraction, and Cloudflare challenge detection.
-  * **Upstream Value**: Decouples third-party scraping fallbacks from core scraper logic; allows other developers to implement custom extraction plugins easily without modifying core. Covered by 6 tests in `tests/test_unpaywall_plugin.py`.
+    * Fully opt-in so default scraping behavior is untouched and zero third-party calls occur unless configured.
+  * **Upstream Value**: Decouples third-party scraping fallbacks from core scraper logic; allows other developers to implement custom extraction plugins easily without modifying core. Covered by 8 tests in `tests/test_unpaywall_plugin.py`.
+  * **Compare URL**: `https://github.com/grregis/MuckScraper/compare/main...parkfour:feat/scraper-fallback-plugins`
 
 ### Rules for New Pull Requests
 1. **Always Branch from Upstream**: When creating PR branches for `grregis/MuckScraper`, branch directly from `upstream/main` (`git checkout -b fix/feature-name upstream/main`).
