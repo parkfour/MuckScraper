@@ -42,23 +42,13 @@ Always use the dedicated GitHub identity and SSH agent configuration when commit
 ### Submitted / Active PRs
 * **PR #46** (`feat/feed-export-plugin`):
   * **Summary**: Adds outbound feed syndication for `/headlines`, `/articles`, and `/multi-stories` so users can subscribe to MuckScraper editions and topics in RSS readers (NetNewsWire, Feedly, Miniflux, etc.).
-  * **Key Capabilities**:
-    * RSS 2.0 XML with Atom self-links, RFC 822 `pubDate`, sanitized HTML summaries, source outlet attribution with bias labels, and topic categories.
-    * JSON Feed 1.1 specification support.
-    * Transparent format negotiation via query (`?format=rss`, `?format=json`), direct URL extensions (`.rss`, `.json`, `/feed.xml`), or HTTP `Accept` headers.
-    * Native topic filtering preserved (`/articles.rss?topic=US+Politics` or `?topic=US+Politics&format=rss`).
-    * HTML `<head>` auto-discovery tag `<link rel="alternate" type="application/rss+xml">`.
-    * Feed access permitted when `PUBLIC_READ_ACCESS=false`, with optional `FEED_ACCESS_TOKEN` for private subscriptions.
-  * **Upstream Value**: Zero new dependencies (stdlib `xml.etree.ElementTree` + existing `bleach`), non-intrusive plugin wrapper `render_feed_or_template()`, fully covered by 15 tests in `tests/test_feed_export.py`.
+  * **Status**: Review comments from `grregis` addressed in commit `da9679a` (access control on `PUBLIC_READ_ACCESS=false`, removed token leak in HTML discovery link, sanitized JSON feed summaries with bleach, used `hmac.compare_digest`, added route tests).
   * **PR URL**: `https://github.com/grregis/MuckScraper/pull/46`
 
+### Closed / Upstream Policy Decisions
 * **PR #47** (`feat/scraper-fallback-plugins`):
-  * **Summary**: Decoupled, zero-overhead scraper fallback registry in `news_fetcher/scraper_plugins.py` that allows pluggable article recovery when standard scraping yields sparse or paywalled text.
-  * **Key Capabilities**:
-    * Clean plugin interface `register_fallback_plugin()`, `run_fallback_plugins()` with env discovery (`SCRAPER_FALLBACK_PLUGINS="module:function"` or `ENABLE_UNPAYWALL_FALLBACK=true`).
-    * Unpaywall & Wayback Machine fallback (`news_fetcher/unpaywall.py`) with tracking parameter stripping, raw `id_` HTML fetching to avoid injected Wayback JS, JSON-LD structured data extraction, and Cloudflare challenge detection.
-    * Fully opt-in so default scraping behavior is untouched and zero third-party calls occur unless configured.
-  * **Upstream Value**: Decouples third-party scraping fallbacks from core scraper logic; allows other developers to implement custom extraction plugins easily without modifying core. Covered by 8 tests in `tests/test_unpaywall_plugin.py`.
+  * **Status**: Closed by maintainer (`grregis`) on 2026-11-12 as an editorial policy decision: MuckScraper only reads what a publisher serves directly to ordinary visitors without referer spoofing or third-party web archive lookups.
+  * **Production Memory**: Kept active on `lakefour-deployment` as an intentional site-specific local feature.
   * **PR URL**: `https://github.com/grregis/MuckScraper/pull/47`
 
 ### Rules for New Pull Requests
