@@ -5,7 +5,7 @@ from flask_login import current_user
 from aggregator.permissions import ROLE_ADMIN, ROLE_SCRAPER, public_or_login, role_required
 from sqlalchemy import case, func, or_
 from aggregator import db
-from aggregator.feed_export import render_feed_or_template
+from aggregator.feed_export import render_feed_or_template, feed_or_public_or_login
 from aggregator.models import Article, Outlet, Story, Topic
 from aggregator.search import SearchUnavailableError, search_story_ids
 from aggregator.story_view import apply_aggregator_filter
@@ -47,7 +47,7 @@ def fetch_page():
 @admin.route("/articles/feed.xml")
 @admin.route("/articles.json")
 @admin.route("/articles")
-@public_or_login
+@feed_or_public_or_login
 def list_articles(per_page=25, force_multi=False):
     active_label = request.args.get("topic", None)
     active_scrape_status = request.args.get("scrape_status", "").strip().lower() or None
@@ -181,7 +181,7 @@ def list_articles(per_page=25, force_multi=False):
 @admin.route("/multi-stories/feed.xml")
 @admin.route("/multi-stories.json")
 @admin.route("/multi-stories")
-@public_or_login
+@feed_or_public_or_login
 def multi_article_stories():
     return list_articles(per_page=50, force_multi=True)
 
