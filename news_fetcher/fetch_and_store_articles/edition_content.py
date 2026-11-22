@@ -222,7 +222,9 @@ def _fill_story_content(story, metrics, analyse_articles=None, stale_threshold=S
                 story.summary_generated_at = datetime.utcnow()
         else:
             # Single-article story: Ensure story summary exists
-            story.headline = None
+            is_tragedy = any("tragedy" in (t.name or "").lower() for t in story.topics)
+            if not is_tragedy:
+                story.headline = None
             if not story.summary:
                 art = story.articles[0]
                 summary = art.summary or summarize_article(art)

@@ -234,8 +234,10 @@ def detect_analysis_type(obj):
     if 'us politics' in topics_lower and 'sports' in topics_lower:
         return 'politics'
 
+    if any(t == 'tragedy' for t in topics_lower):
+        return 'tragedy'
     if _contains_any(text, PUBLIC_SAFETY_ANALYSIS_KEYWORDS):
-        return 'default'
+        return 'tragedy'
     if any(t == 'us politics' for t in topics_lower) and _contains_any(text, POLITICAL_ANALYSIS_KEYWORDS):
         return 'politics'
     if any(t == 'sci/tech' for t in topics_lower):
@@ -247,6 +249,8 @@ def detect_analysis_type(obj):
         and _contains_any(text, BUSINESS_ANALYSIS_KEYWORDS)
     ):
         return 'business'
+    if any(t == 'tragedy' for t in topics_lower):
+        return 'tragedy'
     return 'default'
 
 
@@ -257,6 +261,7 @@ def get_persona(analysis_type):
         'science': 'science and technology journalist',
         'sports': 'sports journalist',
         'business': 'financial journalist',
+        'tragedy': 'investigative public safety journalist',
         'default': 'professional news analyst'
     }
     return mapping.get(analysis_type, mapping['default'])
@@ -694,6 +699,15 @@ def generate_deep_report(story):
 
         combined = (BRIEF_NOTE + "\n" + combined) if big_story else combined
         prompt = render_prompt("deep_report.business", combined=combined)
+
+    elif analysis_type == 'tragedy':
+        all_articles = left_articles + center_articles + right_articles + unrated_articles
+        combined = format_all_articles(all_articles)
+
+        if not combined.strip():
+            return None
+
+        prompt = render_prompt("deep_report.tragedy", combined=combined)
 
     else:
         # Default — generic deep analysis

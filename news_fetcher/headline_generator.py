@@ -157,7 +157,8 @@ def generate_story_headline(story):
         logger.warning("LLM provider not configured, skipping headline generation.")
         return None
 
-    if len(story.articles) < 2:
+    is_tragedy = any("tragedy" in (t.name or "").lower() for t in story.topics)
+    if len(story.articles) < 2 and not is_tragedy:
         logger.debug(f"Story '{story.title}' has only 1 article, skipping headline.")
         return None
 
@@ -170,7 +171,11 @@ def generate_story_headline(story):
     from aggregator.article_copies import original_articles
     titles, dated_titles = headline_title_lists(original_articles(story.articles))
 
-    prompt = render_prompt("headline_generator", titles=titles, dated_titles=dated_titles)
+    prompt = None
+    if is_tragedy:
+        prompt = render_prompt("headline_generator.tragedy", titles=titles) or render_prompt("headline_generator", titles=titles, dated_titles=dated_titles)
+    else:
+        prompt = render_prompt("headline_generator", titles=titles, dated_titles=dated_titles)
     if prompt is None:
         logger.error("No prompt template found for 'headline_generator'")
         return None
@@ -226,7 +231,10 @@ def _stale_headline_query(lookback_days=None):
     stale, so the first run after deploy refreshes them once.
     """
     from aggregator import db
-    from aggregator.models import Article, Story
+    from aggregator.models import Article, Story, Topic
+
+    tragedy_topic = Topic.query.filter(db.func.lower(Topic.name) == "tragedy").first()
+    tragedy_id = tragedy_topic.id if tragedy_topic else -1
 
     per_story = (
         db.session.query(
@@ -242,7 +250,12 @@ def _stale_headline_query(lookback_days=None):
     query = (
         db.session.query(Story)
         .join(per_story, per_story.c.story_id == Story.id)
-        .filter(per_story.c.article_count >= 2)
+        .filter(
+            db.or_(
+                per_story.c.article_count >= 2,
+                Story.topics.any(Topic.id == tragedy_id),
+            )
+        )
         .filter(
             db.or_(
                 Story.headline.is_(None),

@@ -56,14 +56,13 @@ def is_feed_export_enabled() -> bool:
 def is_feed_token_authorized() -> bool:
     """
     Check if feed access is authorized via FEED_ACCESS_TOKEN.
-    Requires FEED_ACCESS_TOKEN to be configured in the environment AND
-    presented in the request (via '?token=...' query param or Authorization header).
-    Returns False if FEED_ACCESS_TOKEN is not configured or token does not match.
-    Uses constant-time comparison on UTF-8 bytes to prevent timing attacks and handle non-ASCII.
+    If FEED_ACCESS_TOKEN is configured in the environment, require matching
+    query param '?token=...' or Bearer header (constant-time UTF-8 byte comparison).
+    If FEED_ACCESS_TOKEN is not configured, feed access is permitted by default.
     """
     token_configured = os.environ.get("FEED_ACCESS_TOKEN", "").strip()
     if not token_configured:
-        return False
+        return True
 
     configured_bytes = token_configured.encode("utf-8")
 

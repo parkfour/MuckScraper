@@ -123,6 +123,26 @@ def headlines_feed():
     )
 
 
+@public.route("/articles.rss")
+@public.route("/articles/feed.xml")
+@public.route("/articles.json")
+@public.route("/articles")
+@public_or_login
+def public_articles():
+    from aggregator.blueprints.admin.articles import list_articles
+    return list_articles()
+
+
+@public.route("/multi-stories.rss")
+@public.route("/multi-stories/feed.xml")
+@public.route("/multi-stories.json")
+@public.route("/multi-stories")
+@public_or_login
+def public_multi_stories():
+    from aggregator.blueprints.admin.articles import multi_article_stories
+    return multi_article_stories()
+
+
 @public.route("/headlines/opinion")
 @public_or_login
 def edition_opinion():
@@ -155,7 +175,7 @@ def editions_by_month(editions):
     for edition in editions:
         days = months.setdefault(edition.date.strftime("%B %Y"), OrderedDict())
         days.setdefault(edition.date.strftime("%A, %B %d"), []).append(edition)
-    order = {"morning": 0, "evening": 1}
+    order = {"morning": 0, "midday": 1, "evening": 2}
     return [
         (month, [(day, sorted(eds, key=lambda e: order.get(e.edition_type, 2))) for day, eds in days.items()])
         for month, days in months.items()

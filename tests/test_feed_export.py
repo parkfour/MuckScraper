@@ -432,7 +432,7 @@ def test_admin_multi_stories_rss(app_with_db):
     assert b"<channel>" in resp.data
 
 
-def test_feeds_require_login_when_public_read_access_is_false_without_token(app_with_db):
+def test_feeds_allowed_when_public_read_access_is_false_without_token(app_with_db):
     app_with_db.config["PUBLIC_READ_ACCESS"] = False
     client = app_with_db.test_client()
 
@@ -441,22 +441,19 @@ def test_feeds_require_login_when_public_read_access_is_false_without_token(app_
     assert html_resp.status_code == 302
     assert "/auth/login" in html_resp.headers["Location"]
 
-    # Without token configured or provided, feeds require login (302) like web pages
+    # Without token configured, feeds are allowed on lakefour-deployment
     rss_resp = client.get("/headlines.rss")
-    assert rss_resp.status_code == 302
-    assert "/auth/login" in rss_resp.headers["Location"]
+    assert rss_resp.status_code == 200
+    assert "application/rss+xml" in rss_resp.headers["Content-Type"]
 
     rss_query_resp = client.get("/headlines?format=rss")
-    assert rss_query_resp.status_code == 302
-    assert "/auth/login" in rss_query_resp.headers["Location"]
+    assert rss_query_resp.status_code == 200
 
     topic_rss_resp = client.get("/admin/articles.rss?topic=US+Politics")
-    assert topic_rss_resp.status_code == 302
-    assert "/auth/login" in topic_rss_resp.headers["Location"]
+    assert topic_rss_resp.status_code == 200
 
     json_resp = client.get("/headlines.json")
-    assert json_resp.status_code == 302
-    assert "/auth/login" in json_resp.headers["Location"]
+    assert json_resp.status_code == 200
 
 
 def test_feed_access_token_enforcement(app_with_db):
