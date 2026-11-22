@@ -38,7 +38,8 @@ Always use the dedicated GitHub identity and SSH agent configuration when commit
 * **PR #43** (`feat/json-ld-article-body`): Extracts article body from JSON-LD schema with fallback.
 * **PR #44** (`fix/font-stack-quote-spacing` - commit `90cbc77`): Prioritizes Western system fonts and forces `font-kerning: normal` to fix smart-quote spacing. Merged 2026-11-11.
 * **PR #45** (`fix/openai-compatible-transient-retries` - commit `ffe31b8`): Adds transient error retries (502, 503, 504) for OpenAI-compatible LLM endpoints. Merged 2026-11-11.
-* **PR #46** (`feat/feed-export-plugin` - commit `27b3554` / `d791c9a`): Adds outbound feed syndication (RSS 2.0 and JSON Feed 1.1) for `/headlines`, `/admin/articles`, and `/admin/multi-stories` with scoped token auth, safe escaping, RFC 3339 timestamps, and absolute self-links. Merged 2026-11-17. Maintainer note: suggested optional follow-up PR to allow `/headlines.rss` to export all stories in the edition rather than just the first page.
+* **PR #46** (`feat/feed-export-plugin` - commit `27b3554` / `d791c9a`): Adds outbound feed syndication (RSS 2.0 and JSON Feed 1.1) for `/headlines`, `/admin/articles`, and `/admin/multi-stories` with scoped token auth, safe escaping, RFC 3339 timestamps, and absolute self-links. Merged 2026-11-17.
+* **PR #48** (`feat/edition-feed-all-stories` - commit `ef9f65a` / `8303e49`): Exports all stories in the published edition for `/headlines.rss` and `/headlines.json` rather than paginating to 10 stories. Merged 2026-11-21.
 
 ### Submitted / Active PRs
 *(None currently active)*

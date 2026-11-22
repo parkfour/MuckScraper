@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # pays zero extra model swaps. Ollama holds one model at a time; generating
 # these inline per article on a different tier from grouping/classification
 # would swap models on every story and cost roughly 40 minutes a run.
-HEADLINE_TIER = llm_client.TIER_FAST
+HEADLINE_TIER = llm_client.TIER_QUALITY
 
 # How far back the per-run pass looks. Long enough to cover stories still
 # accumulating articles, short enough that the pass does not walk the whole
@@ -65,16 +65,55 @@ _LLM_FAILURE_RE = re.compile(
 )
 
 
+# Wording from the headline prompt's own examples. With almost nothing to go
+# on (two Reason blog titles, "The Mayflower Extract"), the model copied the
+# figure-copying example into the headline: "The Mayflower extracts 1.7M
+# stays" (story 97307, 2026-11-15), and again in 1 of 5 offline reruns. The
+# example was reworded the same day; these catch the old and new wording.
+# Keep them to phrases no real headline uses: "stays at 1.7M" (the rerun's
+# echo) is left out because a jobless-claims headline could say exactly that.
+_PROMPT_EXAMPLE_ECHOES = (
+    "1.7m stays",
+    "keeps its comma",
+    "if a title says",
+)
+
+
 def _looks_like_llm_failure(headline):
     """True when `headline` is an error/refusal/commentary rather than a headline.
 
     A real headline is a single line, so any newline (the model adding an
     explanation after the headline) is also a rejection; the story then keeps
     its old headline and is retried next run, like any other failed call.
+    Echoes of the prompt's own examples are rejected the same way.
     """
     if not headline or "\n" in headline:
         return True
-    return bool(_LLM_FAILURE_RE.match(headline)) or "please provide" in headline.lower()
+    lowered = headline.lower()
+    if any(echo in lowered for echo in _PROMPT_EXAMPLE_ECHOES):
+        return True
+    return bool(_LLM_FAILURE_RE.match(headline)) or "please provide" in lowered
+
+
+def headline_title_lists(articles, limit=10):
+    """The prompt's title list, plain and dated: (titles, dated_titles).
+
+    Newest first by publication date. The dated list prefixes each title with
+    its date, "- (Nov 14) ...": an offline A/B on 2026-11-16 (17 stories x 5
+    runs, reviewer/headline_prompt_ab_20261116.md) found dated titles plus a
+    "prefer the newest development unless an older title is clearly bigger"
+    rule led with the newest news on revived stories without burying the main
+    event on fresh ones. A prompt opts in by using {dated_titles}; the default
+    prompt keeps {titles}, so its behaviour is unchanged.
+    """
+    ordered = sorted(articles, key=lambda a: getattr(a, "date", None) or datetime.min, reverse=True)[:limit]
+    titles = "\n".join(f"- {article.title}" for article in ordered)
+    dated = "\n".join(
+        f"- ({article.date.strftime('%b')} {article.date.day}) {article.title}"
+        if getattr(article, "date", None) else f"- {article.title}"
+        for article in ordered
+    )
+    return titles, dated
 
 
 
@@ -130,14 +169,13 @@ def generate_story_headline(story):
     # Copies are left out: a repeated title is a vote for the topic, and a
     # republished article is not a second outlet's vote.
     from aggregator.article_copies import original_articles
-    sorted_articles = sorted(original_articles(story.articles), key=lambda a: getattr(a, "date", None) or datetime.min, reverse=True)
+    titles, dated_titles = headline_title_lists(original_articles(story.articles))
 
-    titles = "\n".join(
-        f"- {article.title}" for article in sorted_articles[:10]
-    )
-
-    prompt_key = "headline_generator.tragedy" if is_tragedy else "headline_generator"
-    prompt = render_prompt(prompt_key, titles=titles) or render_prompt("headline_generator", titles=titles)
+    prompt = None
+    if is_tragedy:
+        prompt = render_prompt("headline_generator.tragedy", titles=titles) or render_prompt("headline_generator", titles=titles, dated_titles=dated_titles)
+    else:
+        prompt = render_prompt("headline_generator", titles=titles, dated_titles=dated_titles)
     if prompt is None:
         logger.error("No prompt template found for 'headline_generator'")
         return None
@@ -193,7 +231,10 @@ def _stale_headline_query(lookback_days=None):
     stale, so the first run after deploy refreshes them once.
     """
     from aggregator import db
-    from aggregator.models import Article, Story
+    from aggregator.models import Article, Story, Topic
+
+    tragedy_topic = Topic.query.filter(db.func.lower(Topic.name) == "tragedy").first()
+    tragedy_id = tragedy_topic.id if tragedy_topic else -1
 
     per_story = (
         db.session.query(
@@ -205,10 +246,6 @@ def _stale_headline_query(lookback_days=None):
         .group_by(Article.story_id)
         .subquery()
     )
-
-    from aggregator.models import Topic
-    tragedy_topic = Topic.query.filter(db.func.lower(Topic.name) == "tragedy").first()
-    tragedy_id = tragedy_topic.id if tragedy_topic else -1
 
     query = (
         db.session.query(Story)
@@ -261,7 +298,6 @@ def generate_headlines_for_stale_stories(lookback_days=STALE_HEADLINE_LOOKBACK_D
 
     logger.info(f"[Headlines] Generating {len(stories)} missing/stale headlines...")
     generated = failed = 0
-    import time
     for story in stories:
         headline = generate_story_headline(story)
         if headline:
@@ -270,7 +306,6 @@ def generate_headlines_for_stale_stories(lookback_days=STALE_HEADLINE_LOOKBACK_D
             generated += 1
         else:
             failed += 1
-        time.sleep(2)
 
     db.session.commit()
     logger.info(f"[Headlines] Generated {generated}, failed {failed}.")

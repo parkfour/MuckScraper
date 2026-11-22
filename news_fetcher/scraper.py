@@ -346,11 +346,11 @@ def should_auto_rescrape_article(article, minimum_content_length=500):
     content = getattr(article, "content", None) or ""
     content_length = len(_clean_text(re.sub(r"<[^>]+>", " ", content)))
 
-    if status == SCRAPE_STATUS_SKIPPED:
+    if status in (SCRAPE_STATUS_BLOCKED, SCRAPE_STATUS_SKIPPED):
         return False
-    if status in ("pending", SCRAPE_STATUS_FAILED, SCRAPE_STATUS_BLOCKED):
+    if status in ("pending", SCRAPE_STATUS_FAILED):
         return True
-    if status in (SCRAPE_STATUS_SUCCESS, SCRAPE_STATUS_FALLBACK, "unpaywalled"):
+    if status in (SCRAPE_STATUS_SUCCESS, SCRAPE_STATUS_FALLBACK):
         return content_length < minimum_content_length
     return not content or content_length < minimum_content_length
 

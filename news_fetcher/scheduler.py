@@ -173,7 +173,8 @@ _QUALITY_STEP_COUNTERS = {
     "edition_publish": (
         "publish_edition",
         (
-            "story_count", "dedupe_skip_count", "mixed_coverage_count",
+            "story_count", "dedupe_skip_count", "running_story_skip_count",
+            "mixed_coverage_count",
             "caps_skipped_bias", "balance_bucket_counts",
         ),
     ),
@@ -693,6 +694,28 @@ def _notify_n8n():
         logging.warning(f"  [n8n] Webhook failed ({e}) — continuing normally")
 
 
+def _shut_down_or_continue_backfill(mark_idle):
+    """End of a run: fire the shutdown webhook, or, when "continue after
+    runs" is on and this run stopped a backfill, keep the box on and start
+    the backfill again. `mark_idle` marks the run finished; the resume is
+    requested only after it, or the backfill would see the run and stop."""
+    try:
+        resume = backfill.resume_wanted()
+    except Exception as e:
+        logging.warning("  [Backfill] Could not check continue-after-runs (%s)", e)
+        resume = False
+    if resume:
+        logging.info("  [Backfill] Continuing the backfill this run stopped; not shutting the Ollama box down")
+    else:
+        _notify_n8n()
+    mark_idle()
+    if resume:
+        ok, message = backfill.request_resume()
+        logging.info("  [Backfill] %s", message)
+        if not ok:
+            _notify_n8n()
+
+
 def _refresh_inference_health(ollama_state, label):
     """Probe real Ollama inference and set llm_client's wedged flag.
 
@@ -1148,14 +1171,12 @@ def run_all_fetches(run_full_pipeline=True):
         _notify_fetch_report(fetch_report)
 
         # Notify n8n pipeline is done — triggers Ollama machine suspend
-        _notify_n8n()
-
-        _save_json_setting(FETCH_RUN_STATUS_KEY, {
+        _shut_down_or_continue_backfill(lambda: _save_json_setting(FETCH_RUN_STATUS_KEY, {
             "status": "idle",
             "started_at": run_metrics["started_at"],
             "run_full_pipeline": run_full_pipeline,
             "finished_at": run_metrics.get("finished_at"),
-        })
+        }))
 
     logging.info("=== Scheduled fetch run complete ===")
 
@@ -1167,6 +1188,8 @@ if __name__ == "__main__":
         db.create_all()
         # A backfill marked running died with the previous process.
         backfill.mark_interrupted_at_startup()
+        # A resumed backfill that runs out of work lets the box shut down.
+        backfill.SUSPEND_HOOK = _notify_n8n
         # Only fetch on startup if enough time has passed
         if should_fetch_now():
             run_all_fetches(

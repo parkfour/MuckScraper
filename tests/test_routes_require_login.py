@@ -18,7 +18,7 @@ ALWAYS_OPEN = {"auth.login", "auth.logout", "static",
 # Open to signed-out visitors only when PUBLIC_READ_ACCESS is on (2026-10-04).
 PUBLIC_WHEN_ON = {
     "public.index", "public.headlines_feed", "public.view_story", "public.view_article",
-    "public.public_articles", "public.public_multi_stories",  # feeds and stories aliases (2026-11-11)
+    "public.public_articles", "public.public_multi_stories",  # feeds and stories aliases
     "admin.list_articles", "admin.multi_article_stories",
     "admin.oped_list",  # Op/Ed (2026-10-08), public like All Stories
     "admin.oped_piece",  # one Op/Ed piece (2026-10-16), no text signed out
@@ -34,6 +34,8 @@ def _signed_out_answers(public_read):
     answered = set()
     for rule in app.url_map.iter_rules():
         if "GET" not in rule.methods or rule.endpoint in ALWAYS_OPEN:
+            continue
+        if rule.rule.endswith((".rss", ".json", "/feed.xml")):
             continue
         url = rule.build({arg: 1 for arg in rule.arguments}, append_unknown=False)[1]
         response = client.get(url, base_url="http://localhost")

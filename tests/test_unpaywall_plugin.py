@@ -116,6 +116,18 @@ class UnpaywallPluginTests(unittest.TestCase):
         self.assertEqual(content, "<p>Recovered by custom plugin</p>")
         self.assertEqual(method, "test_plugin_custom_engine")
 
+    def test_init_plugins_from_env_loads_unpaywall_when_flag_enabled(self):
+        with mock.patch.dict("os.environ", {"ENABLE_UNPAYWALL_FALLBACK": "true"}):
+            plugins = scraper_plugins.get_fallback_plugins()
+            self.assertEqual(len(plugins), 1)
+            self.assertEqual(plugins[0][0], "unpaywall")
+
+    def test_init_plugins_from_env_loads_custom_spec(self):
+        with mock.patch.dict("os.environ", {"SCRAPER_FALLBACK_PLUGINS": "news_fetcher.unpaywall:unpaywall_article"}):
+            plugins = scraper_plugins.get_fallback_plugins()
+            self.assertEqual(len(plugins), 1)
+            self.assertEqual(plugins[0][0], "unpaywall")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,9 +1,9 @@
 # news_fetcher/llm_client.py
 #
 # Thin dispatch layer so the rest of the pipeline doesn't care whether the
-# backend is a home Ollama box, Gemini, or any OpenAI-compatible endpoint
-# (Groq, OpenRouter, and through OpenRouter's base URL anything else speaking
-# that API). Selected independently for text generation and embeddings via
+# backend is a home Ollama box, Gemini, Anthropic, or any OpenAI-compatible
+# endpoint (Groq, OpenRouter, and through OpenRouter's base URL anything else
+# speaking that API). Selected independently for text generation and embeddings via
 # LLM_PROVIDER / EMBEDDING_PROVIDER so either can be flipped back to "ollama"
 # with no code changes once Ollama is reachable again.
 #
@@ -15,6 +15,7 @@ import re
 import time
 import logging
 import requests
+from news_fetcher import saved_settings
 
 logger = logging.getLogger(__name__)
 
@@ -109,10 +110,107 @@ OPENROUTER_HOST = os.environ.get("OPENROUTER_HOST", "https://openrouter.ai/api/v
 OPENROUTER_SITE_URL = os.environ.get("OPENROUTER_SITE_URL", "")
 OPENROUTER_APP_NAME = os.environ.get("OPENROUTER_APP_NAME", "")
 
-JETSON_HOST = os.environ.get("JETSON_HOST", "http://jetson.n.parkfour.com:8080/v1")
+JETSON_HOST = os.environ.get("JETSON_HOST", "")
 JETSON_MODEL = os.environ.get("JETSON_MODEL", "/usr/local/llm-models/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf")
 JETSON_FAST_MODEL = os.environ.get("JETSON_FAST_MODEL", "") or JETSON_MODEL
 JETSON_API_KEY = os.environ.get("JETSON_API_KEY", "not-needed")
+
+
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+# No default model, for the same reason as GROQ_MODEL: a baked-in name goes
+# stale when the model is retired, and an unset one reads as "not configured".
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "")
+ANTHROPIC_FAST_MODEL = os.environ.get("ANTHROPIC_FAST_MODEL", "") or ANTHROPIC_MODEL
+ANTHROPIC_HOST = os.environ.get("ANTHROPIC_HOST", "https://api.anthropic.com/v1")
+ANTHROPIC_VERSION = "2023-06-01"
+# The Messages API requires max_tokens on every call, unlike the other
+# providers here. 4096 is comfortably above the longest deep report; a
+# response that hits it is truncated and logged rather than dropped.
+ANTHROPIC_MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "4096"))
+
+
+# ── Settings saved in the admin UI ──
+# Everything above comes from the environment. Settings › LLM providers can
+# also save these in the database (aggregator/config_store.py, keys encrypted);
+# a saved value wins over the environment and a cleared one falls back to it.
+# configure() rebinds the module globals, so callers keep reading
+# llm_client.OLLAMA_HOST etc. exactly as before. EMBEDDING_PROVIDER and the
+# embedding models stay environment-only: switching them means re-embedding.
+OVERRIDABLE_SETTINGS = (
+    "LLM_PROVIDER", "LLM_FAST_PROVIDER",
+    "OLLAMA_HOST", "OLLAMA_FALLBACK_HOST", "OLLAMA_MODEL", "OLLAMA_FAST_MODEL",
+    "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "ANTHROPIC_FAST_MODEL",
+    "GEMINI_API_KEY", "GEMINI_MODEL", "GEMINI_FAST_MODEL",
+    "GROQ_API_KEY", "GROQ_MODEL", "GROQ_FAST_MODEL",
+    "OPENROUTER_API_KEY", "OPENROUTER_MODEL", "OPENROUTER_FAST_MODEL",
+)
+CHAT_PROVIDERS = ("ollama", "anthropic", "gemini", "groq", "openrouter")
+_ENV_DEFAULTS = {"LLM_PROVIDER": "ollama", "GEMINI_MODEL": "gemini-2.5-flash-lite"}
+
+# Saved settings (news_fetcher/saved_settings.py) last applied by configure().
+_applied_settings_version = 0
+
+
+def _sync_config():
+    """Re-apply the provider settings when the saved ones changed."""
+    global _applied_settings_version
+    version, overrides = saved_settings.snapshot()
+    if version != _applied_settings_version:
+        _applied_settings_version = version
+        configure(overrides)
+
+
+def configure(overrides=None):
+    """Rebind the provider settings from the environment plus `overrides`
+    ({name: value}; a missing name means "use the environment". A blank value
+    stays blank: that is a saved key that can't be decrypted, which must not
+    fall back to the environment)."""
+    global LLM_PROVIDER, LLM_FAST_PROVIDER
+    global OLLAMA_HOST, OLLAMA_FALLBACK_HOST, OLLAMA_MODEL, OLLAMA_FAST_MODEL
+    global ANTHROPIC_API_KEY, ANTHROPIC_MODEL, ANTHROPIC_FAST_MODEL
+    global GEMINI_API_KEY, GEMINI_MODEL, GEMINI_FAST_MODEL, _gemini_client
+    global GROQ_API_KEY, GROQ_MODEL, GROQ_FAST_MODEL
+    global OPENROUTER_API_KEY, OPENROUTER_MODEL, OPENROUTER_FAST_MODEL
+    overrides = overrides or {}
+
+    def get(name):
+        if name in overrides:
+            return str(overrides[name] or "").strip()
+        return str(os.environ.get(name, _ENV_DEFAULTS.get(name, ""))).strip()
+
+    old_hosts = (OLLAMA_HOST, OLLAMA_FALLBACK_HOST)
+    old_gemini_key = GEMINI_API_KEY
+
+    LLM_PROVIDER = get("LLM_PROVIDER").lower() or "ollama"
+    # "main" is what Settings saves for "Same as main", so a saved choice can
+    # undo an LLM_FAST_PROVIDER set in the environment.
+    LLM_FAST_PROVIDER = get("LLM_FAST_PROVIDER").lower()
+    if LLM_FAST_PROVIDER in ("", "main"):
+        LLM_FAST_PROVIDER = LLM_PROVIDER
+    OLLAMA_HOST = get("OLLAMA_HOST")
+    OLLAMA_FALLBACK_HOST = get("OLLAMA_FALLBACK_HOST")
+    OLLAMA_MODEL = get("OLLAMA_MODEL")
+    OLLAMA_FAST_MODEL = get("OLLAMA_FAST_MODEL") or OLLAMA_MODEL
+    ANTHROPIC_API_KEY = get("ANTHROPIC_API_KEY")
+    ANTHROPIC_MODEL = get("ANTHROPIC_MODEL")
+    ANTHROPIC_FAST_MODEL = get("ANTHROPIC_FAST_MODEL") or ANTHROPIC_MODEL
+    GEMINI_API_KEY = get("GEMINI_API_KEY")
+    GEMINI_MODEL = get("GEMINI_MODEL") or _ENV_DEFAULTS["GEMINI_MODEL"]
+    GEMINI_FAST_MODEL = get("GEMINI_FAST_MODEL") or GEMINI_MODEL
+    GROQ_API_KEY = get("GROQ_API_KEY")
+    GROQ_MODEL = get("GROQ_MODEL")
+    GROQ_FAST_MODEL = get("GROQ_FAST_MODEL") or GROQ_MODEL
+    OPENROUTER_API_KEY = get("OPENROUTER_API_KEY")
+    OPENROUTER_MODEL = get("OPENROUTER_MODEL")
+    OPENROUTER_FAST_MODEL = get("OPENROUTER_FAST_MODEL") or OPENROUTER_MODEL
+
+    # Forget state tied to the old values: the cached Gemini client holds
+    # its key, and the host-health cache names hosts that may have changed.
+    if GEMINI_API_KEY != old_gemini_key:
+        _gemini_client = None
+    if (OLLAMA_HOST, OLLAMA_FALLBACK_HOST) != old_hosts:
+        _ollama_state["active"] = None
+        _ollama_state["next_primary_probe"] = 0.0
 
 
 def _openrouter_headers():
@@ -130,7 +228,7 @@ def _openrouter_headers():
 #
 # Read through _openai_compatible_config() rather than directly, so tests can
 # monkeypatch the module-level vars the way they already do for Ollama/Gemini.
-OPENAI_COMPATIBLE_PROVIDERS = ("groq", "openrouter", "jetson", "custom")
+OPENAI_COMPATIBLE_PROVIDERS = ("groq", "openrouter")
 
 
 def _openai_compatible_config(provider):
@@ -177,6 +275,7 @@ def provider_for_tier(tier=TIER_QUALITY):
     provider, this picks the provider itself. An unrecognized tier resolves to
     the quality provider, matching model_for_tier()'s degrade-to-quality rule.
     """
+    _sync_config()
     return LLM_FAST_PROVIDER if tier == TIER_FAST else LLM_PROVIDER
 
 
@@ -187,6 +286,7 @@ def providers_in_use():
     LLM_PROVIDER -- callers should render per-provider UI off this rather than
     off the tier count, or a single-provider setup shows two identical rows.
     """
+    _sync_config()
     providers = [LLM_PROVIDER]
     if LLM_FAST_PROVIDER != LLM_PROVIDER:
         providers.append(LLM_FAST_PROVIDER)
@@ -214,9 +314,14 @@ def is_configured(tier=TIER_QUALITY):
     the global provider would gate their work on a backend they never use.
     Defaults to quality so existing callers are unchanged.
     """
+    _sync_config()
     provider = provider_for_tier(tier)
+    if provider in ("jetson", "custom"):
+        return bool(JETSON_HOST and JETSON_MODEL)
     if provider == "gemini":
         return bool(GEMINI_API_KEY)
+    if provider == "anthropic":
+        return bool(ANTHROPIC_API_KEY and ANTHROPIC_MODEL)
     if provider in OPENAI_COMPATIBLE_PROVIDERS:
         config = _openai_compatible_config(provider)
         # Both providers in this family require an explicit model name.
@@ -234,10 +339,15 @@ def model_for_tier(tier=TIER_QUALITY):
     Falls back to the quality model for an unrecognized tier so a typo degrades
     to the old behavior (slower but correct) instead of sending a bad model
     name the provider would reject."""
+    _sync_config()
     fast = tier == TIER_FAST
     provider = provider_for_tier(tier)
+    if provider in ("jetson", "custom"):
+        return JETSON_FAST_MODEL if fast else JETSON_MODEL
     if provider == "gemini":
         return GEMINI_FAST_MODEL if fast else GEMINI_MODEL
+    if provider == "anthropic":
+        return ANTHROPIC_FAST_MODEL if fast else ANTHROPIC_MODEL
     if provider in OPENAI_COMPATIBLE_PROVIDERS:
         config = _openai_compatible_config(provider)
         return config["fast_model"] if fast else config["model"]
@@ -252,17 +362,21 @@ def generate_text(prompt, timeout=30, tier=TIER_QUALITY):
     yes/no, or a short headline; TIER_QUALITY (the default) for summaries and
     deep reports, where the larger model's output is what readers actually see.
     """
+    _sync_config()
     provider = provider_for_tier(tier)
     model = model_for_tier(tier)
-    text = None
     if provider == "gemini":
         text = _generate_text_gemini(prompt, timeout, model)
-    elif provider in OPENAI_COMPATIBLE_PROVIDERS:
+    elif provider == "anthropic":
+        text = _generate_text_anthropic(prompt, timeout, model)
+    elif provider in ("jetson", "custom"):
         text = _generate_text_openai_compatible(prompt, timeout, model, provider, tier=tier)
+    elif provider in OPENAI_COMPATIBLE_PROVIDERS:
+        text = _generate_text_openai_compatible(prompt, timeout, model, provider)
     else:
         text = _generate_text_ollama(prompt, timeout, model)
 
-    if text is None and provider != "jetson" and JETSON_HOST:
+    if text is None and provider not in ("jetson", "custom") and JETSON_HOST:
         logger.info(f"  [llm_client] Provider '{provider}' produced no output; failing over to Jetson llama.cpp...")
         text = _generate_text_openai_compatible(prompt, timeout, JETSON_MODEL, "jetson", tier=tier)
     return text
@@ -374,6 +488,7 @@ _inference_state = {"wedged": False, "logged_skip": False}
 
 def uses_ollama():
     """Whether any chat tier or embeddings are served by Ollama."""
+    _sync_config()
     return "ollama" in providers_in_use() or EMBEDDING_PROVIDER != "gemini"
 
 
@@ -583,6 +698,7 @@ def _generate_text_gemini(prompt, timeout, model=None, _attempt=0):
             )
             time.sleep(wait_seconds)
             return _generate_text_gemini(prompt, timeout, model=model, _attempt=_attempt + 1)
+
         logger.info(f"  [llm_client] Gemini generate error: {e}")
         return None
 
@@ -634,12 +750,16 @@ def _generate_text_openai_compatible(prompt, timeout, model, provider, _attempt=
             timeout=timeout,
         )
         if response.status_code in (429, 502, 503, 504) and _attempt < OPENAI_COMPATIBLE_MAX_RETRIES:
-            # 429 is rate-limiting; 502/503/504 are transient unavailability
-            # (e.g. Jetson slot queue temporarily full or briefly re-initializing).
+            # A 429 from these providers is usually a per-minute window rather
+            # than a hard quota -- Groq's free tier caps at 6,000 tokens/minute,
+            # which a single large summary prompt can exceed on its own -- so
+            # waiting it out works, unlike Gemini's per-day quota where a retry
+            # is futile. 502/503/504 are transient unavailability (e.g. provider
+            # overload, gateway drops, temporary restarts, or model loading).
             resp_headers = getattr(response, "headers", None) or {}
-            default_wait = 2 * (_attempt + 1)
+            default_wait = 15 if response.status_code == 429 else 2 * (_attempt + 1)
             wait_seconds = min(
-                float(resp_headers.get("Retry-After", default_wait)),
+                float(resp_headers.get("Retry-After", default_wait)) + 1,
                 OPENAI_COMPATIBLE_MAX_RETRY_WAIT_SECONDS,
             )
             logger.info(f"  [llm_client] {label} returned HTTP {response.status_code}, retrying in {wait_seconds:.0f}s")
@@ -652,6 +772,61 @@ def _generate_text_openai_compatible(prompt, timeout, model, provider, _attempt=
         return (text or "").strip() or None
     except Exception as e:
         logger.info(f"  [llm_client] {label} generate error: {e}")
+        return None
+
+
+# Anthropic answers 529 when its API is overloaded, which like a 429 is
+# transient and worth waiting out.
+_ANTHROPIC_RETRY_STATUSES = (429, 529)
+
+
+def _generate_text_anthropic(prompt, timeout, model=None, _attempt=0):
+    """Anthropic's Messages API. Not OpenAI-compatible (different auth header,
+    a required max_tokens, and content returned as a list of blocks), so it
+    gets its own path rather than a config entry."""
+    if not ANTHROPIC_API_KEY:
+        return None
+    model = model or ANTHROPIC_MODEL
+    try:
+        response = requests.post(
+            f"{ANTHROPIC_HOST.rstrip('/')}/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": ANTHROPIC_VERSION,
+            },
+            json={
+                "model": model,
+                "max_tokens": ANTHROPIC_MAX_TOKENS,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=timeout,
+        )
+        if response.status_code in _ANTHROPIC_RETRY_STATUSES and _attempt < OPENAI_COMPATIBLE_MAX_RETRIES:
+            wait_seconds = min(
+                float(response.headers.get("retry-after", 15)) + 1,
+                OPENAI_COMPATIBLE_MAX_RETRY_WAIT_SECONDS,
+            )
+            logger.info(
+                f"  [llm_client] Anthropic returned {response.status_code}, "
+                f"retrying in {wait_seconds:.0f}s"
+            )
+            time.sleep(wait_seconds)
+            return _generate_text_anthropic(prompt, timeout, model, _attempt=_attempt + 1)
+        response.raise_for_status()
+        data = response.json()
+        if data.get("stop_reason") == "max_tokens":
+            logger.warning(
+                f"  [llm_client] Anthropic response hit ANTHROPIC_MAX_TOKENS="
+                f"{ANTHROPIC_MAX_TOKENS} and was truncated"
+            )
+        text = "".join(
+            block.get("text", "")
+            for block in data.get("content", [])
+            if block.get("type") == "text"
+        )
+        return text.strip() or None
+    except Exception as e:
+        logger.info(f"  [llm_client] Anthropic generate error: {e}")
         return None
 
 
@@ -670,6 +845,7 @@ def _generate_text_openrouter(prompt, timeout, model=None, _attempt=0, tier=TIER
 _NO_EMBEDDING_PROVIDERS = {
     "groq": "Groq serves no embedding models",
     "openrouter": "OpenRouter routes chat completions only, not embeddings",
+    "anthropic": "Anthropic serves no embedding models",
 }
 _warned_embedding_providers = set()
 
@@ -688,6 +864,7 @@ def get_embedding(text):
     re-embed of the whole corpus (and a migration if the dimensions differ
     from Story.embedding's Vector(768)) or story grouping silently degrades.
     """
+    _sync_config()
     if EMBEDDING_PROVIDER == "gemini":
         return _get_embedding_gemini(text)
     if EMBEDDING_PROVIDER not in ("ollama", "") and EMBEDDING_PROVIDER not in _warned_embedding_providers:
@@ -746,14 +923,57 @@ def _get_embedding_gemini(text):
         return None
 
 
+# How long an OpenAI-compatible probe result is reused. The summarizer checks
+# status before every call, so without this a run would add a GET per call.
+_OPENAI_COMPATIBLE_PROBE_TTL = 30
+_openai_compatible_probe_cache = {}
+
+
+def _probe_openai_compatible(provider):
+    """Whether an OpenAI-compatible endpoint actually answers (GET {base}/models).
+
+    A configured key used to be taken as "up", but OPENROUTER_HOST can point at
+    a server on the LAN (llama-server, vLLM) that is simply not running: on
+    2026-11-08 the analyse-all step passed its status check while llama-server
+    refused every call. Any HTTP answer except an auth refusal or a 5xx counts
+    as up, so an endpoint without /models (404) or one rate-limiting us (429)
+    is not reported down; a refused or timed-out connection is down.
+    """
+    config = _openai_compatible_config(provider)
+    base = (config["base_url"] or "").rstrip("/")
+    if not base:
+        return False
+    key = (base, config["api_key"])
+    now = time.monotonic()
+    cached = _openai_compatible_probe_cache.get(provider)
+    if cached and cached[0] == key and now - cached[1] < _OPENAI_COMPATIBLE_PROBE_TTL:
+        return cached[2]
+    headers = dict(config["headers"] or {})
+    if config["api_key"]:
+        headers["Authorization"] = f"Bearer {config['api_key']}"
+    try:
+        response = requests.get(f"{base}/models", headers=headers, timeout=_OLLAMA_PROBE_TIMEOUT)
+        online = response.status_code < 500 and response.status_code not in (401, 403)
+    except Exception:
+        online = False
+    _openai_compatible_probe_cache[provider] = (key, now, online)
+    return online
+
+
 def _check_provider_status(provider):
-    """Liveness for one named provider. Ollama is probed over the network;
-    the cloud providers have no cheap health endpoint, so a configured key is
-    the best available signal."""
+    """Liveness for one named provider. Ollama and the OpenAI-compatible
+    endpoints are probed over the network; Gemini and Anthropic have no cheap
+    health endpoint, so a configured key is the best available signal."""
     if provider == "gemini":
         return bool(GEMINI_API_KEY)
+    if provider == "anthropic":
+        return bool(ANTHROPIC_API_KEY)
+    if provider in ("jetson", "custom"):
+        return bool(JETSON_HOST)
     if provider in OPENAI_COMPATIBLE_PROVIDERS:
-        return bool(_openai_compatible_config(provider)["api_key"])
+        if not _openai_compatible_config(provider)["api_key"]:
+            return False
+        return _probe_openai_compatible(provider)
     return _check_ollama_status()
 
 
@@ -792,6 +1012,7 @@ def _check_ollama_status():
 def ollama_host_status():
     """Which Ollama host is currently reachable, for the admin status surface.
     Probes the primary first so the reported role matches what real calls use."""
+    _sync_config()
     if OLLAMA_HOST and _probe_ollama_host(OLLAMA_HOST):
         return {"online": True, "host": OLLAMA_HOST, "role": "primary"}
     if OLLAMA_FALLBACK_HOST and _probe_ollama_host(OLLAMA_FALLBACK_HOST):
@@ -823,6 +1044,7 @@ def llm_status_detail():
     summary indicator, where "something the pipeline needs is down" is the
     useful meaning.
     """
+    _sync_config()
     tiers_by_provider = {LLM_PROVIDER: TIER_QUALITY}
     if LLM_FAST_PROVIDER != LLM_PROVIDER:
         tiers_by_provider[LLM_FAST_PROVIDER] = TIER_FAST

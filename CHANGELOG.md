@@ -7,6 +7,67 @@ All notable changes to MuckScraper are documented here.
 ## [Unreleased]
 
 ### Added
+- Backfill: "Continue after runs" (Settings > LLM providers, or
+  `BACKFILL_AUTO_RESUME=true`; off by default). When a scheduled run stops the
+  backfill, it starts again when the run ends, in the same order, and the
+  end-of-run webhook that shuts the Ollama machine down (`N8N_WEBHOOK_URL`) is
+  skipped. Once the backfill has nothing left to do it sends that webhook
+  itself. A backfill you stop yourself stays stopped. Command line:
+  `python -m news_fetcher.backfill auto-resume on|off|reset`.
+- RSS 2.0 and JSON Feed 1.1 feeds for Headlines, All Stories and Grouped
+  Stories (#46, thanks @parkfour): add `.rss` or `.json` to the page address,
+  or `?format=rss`, and the feed keeps the page's topic, time range and search
+  filters. Pages link their feed for feed readers to find. Feeds follow the
+  same access rule as the pages: open when `PUBLIC_READ_ACCESS` is on;
+  otherwise they need an account or a `FEED_ACCESS_TOKEN` (sent as
+  `Authorization: Bearer <token>`, or `?token=`). `ENABLE_FEED_EXPORT=false`
+  turns them off.
+
+### Changed
+- Headlines can be written from titles with their publication dates
+  (`{dated_titles}` in the headline prompt), and a headline that copies the
+  prompt's own example wording is rejected. The default prompt is unchanged.
+- Topics: an article keeps its own topics instead of inheriting its story's
+  whole list, and a story's topics are the ones at least a quarter of its
+  articles share (small stories keep them all). Before, big stories collected
+  every topic any article had and passed them on, so a story about a
+  nationwide flight ground stop ended up under Sports.
+- An edition carries at most two stories from one running story. Stories
+  count as one running story when their headlines share a name (a person,
+  company or place, not a party, institution or US state) and their articles
+  are alike. One scandal had taken five of an edition's 20 places.
+
+### Fixed
+- An edition no longer drops a story as a "duplicate" of an unrelated one
+  because two of their article titles look alike (a newsletter title covering
+  two stories, or two events in one place); near-identical titles now also
+  need the stories' articles to be alike, as shared title words already did.
+
+## [1.2.0] - 2026-11-12
+
+### Upgrading
+- **Run `./install.sh` between fetches.** It applies one migration, which only
+  adds the `config_settings` table, and generates `CONFIG_ENCRYPTION_KEY` in
+  `.env` if it's missing.
+- **Back up `CONFIG_ENCRYPTION_KEY` separately from the database.** It
+  encrypts API keys saved in Settings; without the same key they can't be read
+  and have to be entered again. Installs that keep their keys in `.env` are
+  unaffected.
+- Nothing you configured is changed or discarded. Saving keys in Settings is
+  optional.
+
+### Added
+- **API keys can be saved in Settings** (#38, thanks @bballdavis). Provider and
+  source keys (NewsAPI, GNews, the LLM providers) entered by an admin are
+  encrypted with `CONFIG_ENCRYPTION_KEY` before they're stored, and pages only
+  ever show the last four characters. Keys in `.env` keep working, and nothing
+  is imported from it automatically. Recovery notes in
+  `docs/SAVED_SECRETS.md`.
+- **Compact story cards and one place for feed filters** (#34, thanks
+  @bballdavis). Filters sit beside the search box as removable chips, and
+  "Save as my default" keeps them per account (signed-out visitors get the
+  built-in defaults). Cards without a photo show the outlet name, and the less
+  common card actions are in a ⋯ menu.
 - **Backfill summaries and analysis** for stories already in the database
   (Settings > LLM providers, or `docker compose exec scheduler python -m
   news_fetcher.backfill start [--oldest]`). Newest or oldest stories first;
@@ -16,6 +77,32 @@ All notable changes to MuckScraper are documented here.
   losing work. A hosted provider (Gemini, Groq, a non-local OpenAI-compatible
   endpoint) needs a confirmation first, since it makes several calls per
   story.
+
+### Changed
+- **Editions pick from stories that are still being covered.** A story used to
+  qualify only if it was created in the last 3 days, so a long-running story
+  dropped out on day 4 however much new coverage it got. Now a story qualifies
+  when it gained an article in the last 3 days and started within 7. A story
+  from the previous edition still needs new articles to run again. Without the
+  headline-ranking plugin, candidates are ordered by their newest article.
+- **Western system fonts first, with kerning on** (#44, thanks @parkfour), which
+  fixes the odd spacing around curly quotes on some systems.
+- **The test suite is in the repository** and runs with `DATABASE_URL=sqlite://`
+  in a throwaway container; no test touches your database.
+
+### Fixed
+- **A failed rewrite no longer blanks a story.** When the LLM was down partway
+  through a run, a story due for a new summary lost its old summary and deep
+  report. They now stay until the replacements are written, and the story is
+  retried next run.
+- **OpenAI-compatible endpoints are actually checked.** One with an API key
+  set counted as up even when the server was down. It's now probed
+  (`GET /models`, 5 s timeout), so a dead server skips the LLM steps cleanly.
+- **Brief 502/503/504 errors from OpenAI-compatible endpoints are retried**
+  (#45, thanks @parkfour) instead of failing the call.
+- **A stalled RSS feed no longer hangs the run.** Feeds are downloaded with a
+  timeout (10 s to connect, 20 s of silence); a stall fails like any other
+  error and the feed's fallback is used.
 
 ## [1.1.0] - 2026-11-05
 

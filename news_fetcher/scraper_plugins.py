@@ -6,9 +6,11 @@ library proxies, custom unpaywall services) to attempt article recovery when
 direct publisher scraping fails or encounters access gates.
 
 To register a plugin:
-  1. Environment variable:
+  1. Built-in unpaywall & archive fallback:
+     ENABLE_UNPAYWALL_FALLBACK=true
+  2. Custom plugin environment variable:
      SCRAPER_FALLBACK_PLUGINS="module.path:handler_function,another.module:handler"
-  2. Programmatic registration:
+  3. Programmatic registration:
      from news_fetcher.scraper_plugins import register_fallback_plugin
      register_fallback_plugin("my_plugin", my_handler_fn)
 
@@ -74,9 +76,9 @@ def _init_plugins_from_env() -> None:
                 logger.warning(f"[ScraperPlugins] Failed to load plugin '{spec}': {e}")
         return
 
-    # Auto-register local unpaywall plugin if present and not explicitly disabled
-    disable_auto = os.environ.get("DISABLE_DEFAULT_SCRAPER_PLUGINS", "false").lower() in ("1", "true", "yes")
-    if not disable_auto:
+    # Auto-register local unpaywall plugin if explicitly enabled
+    enable_unpaywall = os.environ.get("ENABLE_UNPAYWALL_FALLBACK", "false").lower() in ("1", "true", "yes")
+    if enable_unpaywall:
         try:
             from news_fetcher.unpaywall import unpaywall_article
             register_fallback_plugin("unpaywall", unpaywall_article)

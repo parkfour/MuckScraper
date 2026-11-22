@@ -5,6 +5,7 @@ left/center/right balance helpers it ranks candidates with.
 """
 
 import logging
+import re
 from datetime import datetime, timedelta
 import numpy as np
 from aggregator import db
@@ -13,6 +14,40 @@ from aggregator.article_signals import ROUNDUP_TITLE_PATTERNS, bias_bucket_for_s
 from news_fetcher.story_grouper import COUNTRY_TOKENS, normalize_title_tokens, titles_are_near_duplicates
 
 logger = logging.getLogger(__name__)
+
+# Which stories can go into an edition (2026-11-12, Regis). A story qualifies
+# when it gained an article in the last EDITION_RECENT_ARTICLE_DAYS, as long as
+# it started within EDITION_STORY_MAX_AGE_DAYS (the grouping window, so a story
+# can't keep collecting coverage forever). Before this the test was the story's
+# own created_at within 3 days, so a long-running story dropped out of every
+# edition on day 4 however much new coverage it got (Nvidia/Huang, 11-09: 142
+# articles and in no edition), and the event only came back through newer
+# split-off stories. Repeats are still limited elsewhere: a story in the
+# previous edition needs new articles, and the ranker's staleness penalty.
+EDITION_RECENT_ARTICLE_DAYS = 3
+EDITION_STORY_MAX_AGE_DAYS = 7
+
+
+def edition_candidate_query(now=None):
+    """Stories eligible for an edition: started within
+    EDITION_STORY_MAX_AGE_DAYS and with an article fetched within
+    EDITION_RECENT_ARTICLE_DAYS. Returns (query, newest-article column) so
+    callers can order by either score or recency."""
+    from aggregator.models import Article, Story
+
+    now = now or datetime.utcnow()
+    latest = (
+        db.session.query(Article.story_id.label("story_id"),
+                         db.func.max(Article.fetched_at).label("latest_fetched_at"))
+        .group_by(Article.story_id)
+        .subquery()
+    )
+    query = (
+        Story.query.join(latest, latest.c.story_id == Story.id)
+        .filter(Story.created_at >= now - timedelta(days=EDITION_STORY_MAX_AGE_DAYS))
+        .filter(latest.c.latest_fetched_at >= now - timedelta(days=EDITION_RECENT_ARTICLE_DAYS))
+    )
+    return query, latest.c.latest_fetched_at
 
 
 def is_generic_roundup_title(title):
@@ -208,10 +243,18 @@ def stories_look_duplicate_for_edition(story_a, story_b):
     titles_a = _story_dedupe_titles(story_a)
     titles_b = _story_dedupe_titles(story_b)
 
+    # A near-identical title pair is strong evidence, but not proof: a
+    # newsletter title ("Mary Peltola flips Alaska's Senate seat. And, Nvidia
+    # won't reinstate Jensen Huang") or two events sharing one setting
+    # ("...as Xi meets Carney ahead of APEC summit" / "Trump arrives ...
+    # ahead of Xi Jinping summit") matches a title from an unrelated story.
+    # So this path gets the same embedding veto as the word match below
+    # (2026-11-18): those two pairs sat at 0.575 and 0.641; replaying 12
+    # days of logged skips, the other 37 near-title skips were all >= 0.80.
     for title_a in titles_a:
         for title_b in titles_b:
             if titles_are_near_duplicates(title_a, title_b):
-                return True
+                return not _stories_semantically_differ(story_a, story_b)
 
     tokens_a = _story_signature_tokens(story_a)
     tokens_b = _story_signature_tokens(story_b)
@@ -226,6 +269,114 @@ def stories_look_duplicate_for_edition(story_a, story_b):
         word_match = bool(outlets_a & outlets_b) and len(distinctive_shared) >= 2 and len(shared_tokens) >= 3
 
     return word_match and not _stories_semantically_differ(story_a, story_b)
+
+
+# Running-story cap (2026-11-14, Regis). One big scandal can fill an edition
+# with angles the same-event check rightly keeps apart: edition 793 ran five
+# Nvidia/Huang stories (testimony calls, export controls, a Democratic probe,
+# the resignation, the Megaspeed blacklist), each pair at 0.66-0.82 similarity,
+# under the 0.80 floor above. So at most EDITION_RUNNING_STORY_CAP kept stories
+# may form one running story: stories linked, directly or through each other,
+# by a shared proper noun in their headlines (a capitalised word other than the
+# first; headlines are written in sentence case) whose article embeddings are
+# at least EDITION_RUNNING_STORY_MIN_SIMILARITY alike.
+#
+# Shared title WORDS were tried first and don't work: 111 wrong drops over 49
+# editions (alleged, democrats, congress...), and "nvidia" is about as common
+# in titles as "alleged" (0.66% vs 0.69% of all titles), so word frequency
+# can't tell them apart either. Proper nouns in headlines, less the ones below,
+# capped only the five Nvidia stories in editions 789-793 and nothing else in
+# a 77-edition replay. Only the generated headline is used: article titles are
+# in title case, where every word is capitalised.
+EDITION_RUNNING_STORY_CAP = 2
+EDITION_RUNNING_STORY_MIN_SIMILARITY = 0.60
+
+# Proper nouns that headline unrelated stories every day: parties,
+# institutions, leagues, calendar words and US states. Countries and leaders
+# are already in EDITION_DEDUPE_NAME_TOKENS. Add here, with a regression case
+# in tests/test_edition_running_story.py, rather than lowering the cap.
+EDITION_RUNNING_STORY_COMMON_TOKENS = {
+    "democrat", "democrats", "democratic", "dem", "dems", "republican",
+    "republicans", "gop", "senate", "house", "congress", "white", "supreme",
+    "court", "doj", "fbi", "cia", "ice", "dhs", "pentagon", "justice",
+    "department", "state", "states", "usa", "nato", "eu", "un", "federal",
+    "fed", "nfl", "nba", "mlb", "nhl", "ncaa", "cfp", "sec", "ceo",
+    "january", "february", "march", "april", "may", "june", "july", "august",
+    "september", "october", "november", "december", "monday", "tuesday",
+    "wednesday", "thursday", "friday", "saturday", "sunday", "new", "north",
+    "south", "east", "west", "city", "county", "national", "international",
+    "world", "global", "black", "christmas", "olympics", "olympic",
+    # US states (two-word names by their distinctive half)
+    "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
+    "connecticut", "delaware", "florida", "georgia", "hawaii", "idaho",
+    "illinois", "indiana", "iowa", "kansas", "kentucky", "louisiana", "maine",
+    "maryland", "massachusetts", "michigan", "minnesota", "mississippi",
+    "missouri", "montana", "nebraska", "nevada", "hampshire", "jersey",
+    "mexico", "york", "carolina", "dakota", "ohio", "oklahoma", "oregon",
+    "pennsylvania", "rhode", "tennessee", "texas", "utah", "vermont",
+    "virginia", "washington", "wisconsin", "wyoming",
+}
+
+_HEADLINE_WORD = re.compile(r"[A-Za-z][A-Za-z0-9'’.&-]*")
+
+
+def headline_proper_tokens(headline):
+    """Normalized tokens of the capitalised words in a sentence-case headline,
+    skipping the first word and common proper nouns."""
+    tokens = set()
+    for index, word in enumerate(_HEADLINE_WORD.findall(headline or "")):
+        if index == 0 or not word[0].isupper():
+            continue
+        for token in normalize_title_tokens(word):
+            if (
+                token.isdigit()
+                or token in EDITION_DEDUPE_GENERIC_TOKENS
+                or token in EDITION_DEDUPE_NAME_TOKENS
+                or token in EDITION_RUNNING_STORY_COMMON_TOKENS
+            ):
+                continue
+            tokens.add(token)
+    return tokens
+
+
+def stories_share_running_story(story_a, story_b):
+    """The shared headline proper nouns linking two stories into one running
+    story, or an empty set. Needs a generated headline on both (single-article
+    stories have none) and usable embeddings that agree."""
+    shared = headline_proper_tokens(story_a.headline) & headline_proper_tokens(story_b.headline)
+    if not shared:
+        return set()
+    centroid_a = _story_embedding_centroid(story_a)
+    centroid_b = _story_embedding_centroid(story_b)
+    if centroid_a is None or centroid_b is None:
+        return set()
+    if float(centroid_a @ centroid_b) < EDITION_RUNNING_STORY_MIN_SIMILARITY:
+        return set()
+    return shared
+
+
+def running_story_members(story, kept_stories, link=stories_share_running_story):
+    """Kept stories in the same running story as `story`: those it links to,
+    and the kept stories linked to them in turn. Returns (members, shared
+    words of the direct links)."""
+    direct = []
+    words = set()
+    for kept in kept_stories:
+        shared = link(story, kept)
+        if shared:
+            direct.append(kept)
+            words |= shared
+    members = list(direct)
+    frontier = list(direct)
+    while frontier:
+        current = frontier.pop()
+        for kept in kept_stories:
+            if kept in members:
+                continue
+            if link(current, kept):
+                members.append(kept)
+                frontier.append(kept)
+    return members, words
 
 
 def _story_balance_bucket(story):
@@ -371,10 +522,9 @@ def publish_edition():
 
     # Get top scored stories as candidates. Pull extra depth so suppressing
     # unchanged previous-edition stories does not leave the edition short.
-    story_cutoff = datetime.utcnow() - timedelta(days=3)
-    candidates = Story.query.filter(
-        Story.headline_score > 0,
-        Story.created_at >= story_cutoff
+    eligible_query, latest_fetched_at = edition_candidate_query()
+    candidates = eligible_query.filter(
+        Story.headline_score > 0
     ).order_by(Story.headline_score.desc()).limit(100).all()
 
     # Fallback for deployments running without the private headline-ranking
@@ -388,14 +538,12 @@ def publish_edition():
     # plugin IS active, at least one story scores > 0 and this branch is skipped,
     # leaving the scored behavior unchanged.
     if not candidates:
-        candidates = Story.query.filter(
-            Story.created_at >= story_cutoff
-        ).order_by(Story.created_at.desc()).limit(100).all()
+        candidates = eligible_query.order_by(latest_fetched_at.desc()).limit(100).all()
         if candidates:
             logger.info(
                 "[Edition] No stories have a positive headline_score "
                 "(headline-ranking plugin inactive); falling back to %d recent "
-                "stories ordered by recency.",
+                "stories ordered by their newest article.",
                 len(candidates),
             )
 
@@ -487,7 +635,31 @@ def publish_edition():
                         kept_story.id, (kept_story.headline or kept_story.title or "")[:90],
                     )
                 return True
+        members, shared = running_story_members(story, [kept for kept, _ in top_20], link=running_story_link)
+        if len(members) >= EDITION_RUNNING_STORY_CAP:
+            if story.id not in logged_running_story_ids:
+                logged_running_story_ids.add(story.id)
+                running_story_skip_ids.append(story.id)
+                logger.info(
+                    "[Edition] Skipping running-story candidate %s '%s' -- %s kept stories already on it (%s), shared %s",
+                    story.id, (story.headline or story.title or "")[:90],
+                    len(members), ", ".join(str(kept.id) for kept in members),
+                    "/".join(sorted(shared)),
+                )
+            return True
         return False
+
+    running_story_links = {}
+
+    def running_story_link(story_a, story_b):
+        """stories_share_running_story(), cached per pair for this publish."""
+        key = (min(story_a.id, story_b.id), max(story_a.id, story_b.id))
+        if key not in running_story_links:
+            running_story_links[key] = stories_share_running_story(story_a, story_b)
+        return running_story_links[key]
+
+    logged_running_story_ids = set()
+    running_story_skip_ids = []
     constrained_skip_counts = {
         "bias_cap": 0,
         "outlet_cap": 0,
@@ -671,7 +843,8 @@ def publish_edition():
         f"[Edition] Published {edition_type} edition for {today} "
         f"with {len(top_20)} stories ({carryover_count} unchanged carry-overs, "
         f"{updated_repeat_count} repeated stories with new updates, "
-        f"{dedupe_skip_count} same-event candidates skipped, "
+        f"{dedupe_skip_count} same-event candidates skipped "
+        f"(of which {len(running_story_skip_ids)} for the running-story cap), "
         f"caps_skipped bias={constrained_skip_counts['bias_cap']} outlet={constrained_skip_counts['outlet_cap']}, "
         f"mixed_coverage={mixed_coverage_count}, balance={balance_bucket_counts})."
     )
@@ -684,6 +857,7 @@ def publish_edition():
         "carryover_count": carryover_count,
         "updated_repeat_count": updated_repeat_count,
         "dedupe_skip_count": dedupe_skip_count,
+        "running_story_skip_count": len(running_story_skip_ids),
         "mixed_coverage_count": mixed_coverage_count,
         "balance_bucket_counts": balance_bucket_counts,
         "caps_skipped_bias": constrained_skip_counts["bias_cap"],
